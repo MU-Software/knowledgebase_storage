@@ -6,7 +6,7 @@ x-logging: &default-logging
 
 services:
   kbstore-api:
-    image: "ghcr.io/mu-software/knowledgebase-storage:${KBSTORE_IMAGE_TAG:?Set KBSTORE_IMAGE_TAG}"
+    image: "ghcr.io/mu-software/knowledgebase_storage:${KBSTORE_IMAGE_TAG:?Set KBSTORE_IMAGE_TAG}"
     command: ["python", "-m", "backend"]
     restart: unless-stopped
     logging: *default-logging
@@ -27,7 +27,7 @@ services:
       start_period: 20s
 
   kbstore-worker:
-    image: "ghcr.io/mu-software/knowledgebase-storage:${KBSTORE_IMAGE_TAG:?Set KBSTORE_IMAGE_TAG}"
+    image: "ghcr.io/mu-software/knowledgebase_storage:${KBSTORE_IMAGE_TAG:?Set KBSTORE_IMAGE_TAG}"
     command: ["python", "-m", "backend.cli", "worker", "--api-url", "http://kbstore-api:8006"]
     restart: unless-stopped
     logging: *default-logging

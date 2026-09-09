@@ -8,7 +8,7 @@ ENV PNPM_HOME="/pnpm" \
 RUN corepack enable
 
 WORKDIR /frontend
-COPY frontend/package.json frontend/pnpm-lock.yaml ./
+COPY frontend/package.json frontend/pnpm-lock.yaml frontend/pnpm-workspace.yaml ./
 RUN pnpm fetch
 COPY frontend/ ./
 RUN pnpm install -r --offline && pnpm run build
@@ -26,14 +26,11 @@ ENV TZ=Asia/Seoul \
 
 WORKDIR /app
 
-RUN --mount=type=cache,target=/root/.cache/uv \
-    --mount=type=bind,source=pyproject.toml,target=pyproject.toml \
-    --mount=type=bind,source=uv.lock,target=uv.lock \
-    uv sync --locked --no-install-project --no-dev
+COPY pyproject.toml uv.lock ./
+RUN --mount=type=cache,target=/root/.cache/uv uv sync --locked --no-install-project --no-dev
 
-COPY backend/ /app/backend/
-COPY pyproject.toml uv.lock /app/
-COPY --from=frontend-builder /frontend/dist/index.html /app/backend/frontend/index.html
+COPY backend/ ./backend/
+COPY --from=frontend-builder /frontend/dist/index.html ./backend/frontend/index.html
 
 RUN --mount=type=cache,target=/root/.cache/uv uv sync --locked --no-dev
 
