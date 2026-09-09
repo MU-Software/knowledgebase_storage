@@ -1,10 +1,15 @@
-import { Box, Button, Checkbox, FormControlLabel, MenuItem, Paper, Stack, TextField, Typography } from '@mui/material'
-import type { FormEvent } from 'react'
+import { Box, Button, Checkbox, MenuItem, Paper, Stack, TextField, Typography } from '@mui/material'
+import type { FormEvent, ReactNode } from 'react'
 
 import type { LLMProvider, RuntimeSetting } from '../api'
 import { useDeleteProvider, useProviders, useSaveProvider, useSaveSettings, useSettings } from '../hooks'
 
-const RUNTIME_FIELDS: { key: keyof RuntimeSetting; label: string; type: string }[] = [
+const LABEL_WIDTH = 220
+const FORM_WIDTH = 560
+
+type Field<K> = { key: K; label: string; type: string; step?: string }
+
+const RUNTIME_FIELDS: Field<keyof RuntimeSetting>[] = [
   { key: 'document_language', label: 'Note language', type: 'text' },
   { key: 'job_max_attempts', label: 'Max attempts', type: 'number' },
   { key: 'job_batch_size', label: 'Batch size', type: 'number' },
@@ -14,7 +19,7 @@ const RUNTIME_FIELDS: { key: keyof RuntimeSetting; label: string; type: string }
   { key: 'worker_poll_interval_seconds', label: 'Worker poll (s)', type: 'number' },
 ]
 
-const PROVIDER_FIELDS: { key: keyof LLMProvider | 'api_key'; label: string; type: string }[] = [
+const PROVIDER_FIELDS: Field<keyof LLMProvider | 'api_key'>[] = [
   { key: 'name', label: 'Name', type: 'text' },
   { key: 'model', label: 'Model', type: 'text' },
   { key: 'base_url', label: 'Base URL', type: 'text' },
@@ -22,12 +27,23 @@ const PROVIDER_FIELDS: { key: keyof LLMProvider | 'api_key'; label: string; type
   { key: 'priority', label: 'Priority', type: 'number' },
   { key: 'min_job_age_seconds', label: 'Min job age (s)', type: 'number' },
   { key: 'context_tokens', label: 'Context tokens', type: 'number' },
+  { key: 'connect_timeout_seconds', label: 'Connect timeout (s)', type: 'number', step: 'any' },
+  { key: 'timeout_seconds', label: 'Request timeout (s)', type: 'number', step: 'any' },
 ]
 
 const formValues = (form: HTMLFormElement) => {
   const entries = [...new FormData(form).entries()].filter(([, value]) => value !== '')
   return Object.fromEntries(entries.map(([key, value]) => [key, value as string]))
 }
+
+const FieldRow = ({ id, label, children }: { id: string; label: string; children: ReactNode }) => (
+  <Stack direction="row" spacing={2} sx={{ alignItems: 'center', width: '100%' }}>
+    <Typography component="label" htmlFor={id} variant="body2" sx={{ width: LABEL_WIDTH, flexShrink: 0 }}>
+      {label}
+    </Typography>
+    <Box sx={{ flex: 1, minWidth: 0 }}>{children}</Box>
+  </Stack>
+)
 
 const RuntimeForm = () => {
   const { data } = useSettings()
@@ -40,13 +56,15 @@ const RuntimeForm = () => {
   }
 
   return (
-    <Paper component="form" onSubmit={submit} sx={{ p: 2, mb: 3 }}>
+    <Paper component="form" onSubmit={submit} sx={{ p: 2, mb: 3, maxWidth: FORM_WIDTH }}>
       <Typography variant="h6" gutterBottom>
         Runtime settings
       </Typography>
-      <Stack direction="row" spacing={1} sx={{ flexWrap: 'wrap', gap: 1 }}>
+      <Stack spacing={1.5}>
         {RUNTIME_FIELDS.map(({ key, label, type }) => (
-          <TextField key={key} name={key} label={label} type={type} defaultValue={data[key]} size="small" />
+          <FieldRow key={key} id={`runtime-${key}`} label={label}>
+            <TextField id={`runtime-${key}`} name={key} type={type} defaultValue={data[key]} size="small" fullWidth />
+          </FieldRow>
         ))}
       </Stack>
       <Button type="submit" variant="contained" sx={{ mt: 2 }} disabled={save.isPending}>
@@ -59,6 +77,7 @@ const RuntimeForm = () => {
 const ProviderForm = ({ provider }: { provider?: LLMProvider }) => {
   const save = useSaveProvider()
   const remove = useDeleteProvider()
+  const prefix = provider?.id ?? 'new'
 
   const submit = (event: FormEvent<HTMLFormElement>) => {
     event.preventDefault()
@@ -71,23 +90,32 @@ const ProviderForm = ({ provider }: { provider?: LLMProvider }) => {
   }
 
   return (
-    <Paper component="form" onSubmit={submit} sx={{ p: 2, mb: 2 }}>
-      <Stack direction="row" spacing={1} sx={{ flexWrap: 'wrap', gap: 1, alignItems: 'center' }}>
-        <TextField name="kind" label="Kind" select defaultValue={provider?.kind ?? 'llama'} size="small" sx={{ minWidth: 120 }}>
-          <MenuItem value="llama">llama</MenuItem>
-          <MenuItem value="anthropic">anthropic</MenuItem>
-        </TextField>
-        {PROVIDER_FIELDS.map(({ key, label, type }) => (
-          <TextField
-            key={key}
-            name={key}
-            label={key === 'api_key' && provider?.has_api_key ? `${label} (set)` : label}
-            type={type}
-            defaultValue={key === 'api_key' ? '' : (provider?.[key as keyof LLMProvider] ?? '')}
-            size="small"
-          />
+    <Paper component="form" onSubmit={submit} sx={{ p: 2, mb: 2, maxWidth: FORM_WIDTH }}>
+      <Stack spacing={1.5}>
+        <FieldRow id={`${prefix}-kind`} label="Kind">
+          <TextField id={`${prefix}-kind`} name="kind" select defaultValue={provider?.kind ?? 'llama'} size="small" fullWidth>
+            <MenuItem value="llama">llama</MenuItem>
+            <MenuItem value="anthropic">anthropic</MenuItem>
+          </TextField>
+        </FieldRow>
+        {PROVIDER_FIELDS.map(({ key, label, type, step }) => (
+          <FieldRow key={key} id={`${prefix}-${key}`} label={key === 'api_key' && provider?.has_api_key ? `${label} (set)` : label}>
+            <TextField
+              id={`${prefix}-${key}`}
+              name={key}
+              type={type}
+              defaultValue={key === 'api_key' ? '' : (provider?.[key as keyof LLMProvider] ?? '')}
+              size="small"
+              fullWidth
+              slotProps={step ? { htmlInput: { step } } : undefined}
+            />
+          </FieldRow>
         ))}
-        <FormControlLabel control={<Checkbox name="enabled" defaultChecked={provider?.enabled ?? true} />} label="Enabled" />
+        <FieldRow id={`${prefix}-enabled`} label="Enabled">
+          <Checkbox id={`${prefix}-enabled`} name="enabled" defaultChecked={provider?.enabled ?? true} />
+        </FieldRow>
+      </Stack>
+      <Stack direction="row" spacing={1} sx={{ mt: 2 }}>
         <Button type="submit" variant="contained" disabled={save.isPending}>
           {provider ? 'Update' : 'Add'}
         </Button>
