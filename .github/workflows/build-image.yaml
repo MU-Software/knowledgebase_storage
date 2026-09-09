@@ -23,8 +23,8 @@ jobs:
 
       - run: uv sync --locked
 
-      - run: uv run ruff check backend hooks
-      - run: uv run ruff format --check backend hooks
+      - run: uv run ruff check backend hooks tools
+      - run: uv run ruff format --check backend hooks tools
       - run: uv run mypy backend
 
       - uses: pnpm/action-setup@v4

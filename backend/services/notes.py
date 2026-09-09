@@ -64,6 +64,9 @@ class NoteService(ServiceImpl[NoteRepository]):
         relative = f"projects/{slugify(job.project)}/log/{day}-{slugify(job.agent)}-{job.id}.md"
         return self.repository.write(relative, self.render(job, result, summarizer).rstrip() + "\n")
 
+    def store(self, relative_path: str, content: str) -> str:
+        return self.repository.write(relative_path, content.rstrip() + "\n")
+
     def list_projects(self) -> list[ProjectSummary]:
         summaries = self.repository.list_summaries()
         counts = Counter(summary.project for summary in summaries)

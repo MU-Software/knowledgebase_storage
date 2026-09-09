@@ -145,3 +145,8 @@ class WorkerConfig(BaseModel):
     document_language: str
     poll_interval_seconds: int
     providers: list[LLMProviderResolved]
+
+
+class NoteWrite(BaseModel):
+    path: str = Field(description="path under the notes directory, e.g. projects/foo/memory/bar.md")
+    content: str

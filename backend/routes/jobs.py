@@ -15,9 +15,11 @@ MAX_LIST_LIMIT = 200
 router = APIRouter(prefix="/jobs", tags=["jobs"])
 
 
-@router.post("", status_code=status.HTTP_202_ACCEPTED)
-async def enqueue(payload: JobBase, service: jobServiceDI) -> JobPublic:
-    return JobPublic.model_validate(await service.enqueue(payload), from_attributes=True)
+@router.post("")
+async def enqueue(payload: JobBase, service: jobServiceDI, response: Response) -> JobPublic:
+    job, created = await service.enqueue(payload)
+    response.status_code = status.HTTP_202_ACCEPTED if created else status.HTTP_200_OK
+    return JobPublic.model_validate(job, from_attributes=True)
 
 
 @router.post("/claim", response_model=Job | None)

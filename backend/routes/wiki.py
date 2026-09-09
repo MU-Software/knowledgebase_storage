@@ -2,9 +2,9 @@ from __future__ import annotations
 
 from typing import Annotated
 
-from fastapi import APIRouter, Query
+from fastapi import APIRouter, Query, status
 
-from backend.schemas import NoteDetail, NoteSummary, ProjectSummary
+from backend.schemas import NoteDetail, NoteSummary, NoteWrite, ProjectSummary
 from backend.services.notes import noteServiceDI
 
 router = APIRouter(prefix="/wiki", tags=["wiki"])
@@ -23,6 +23,11 @@ def notes(service: noteServiceDI, project: Annotated[str | None, Query()] = None
 @router.get("/notes/{path:path}")
 def note(path: str, service: noteServiceDI) -> NoteDetail:
     return service.retrieve(path)
+
+
+@router.put("/notes", status_code=status.HTTP_201_CREATED)
+def put_note(payload: NoteWrite, service: noteServiceDI) -> NoteDetail:
+    return service.retrieve(service.store(payload.path, payload.content))
 
 
 @router.get("/search")

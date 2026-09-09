@@ -5,7 +5,7 @@ from typing import TYPE_CHECKING, Annotated
 from uuid import uuid4
 
 from fastapi import Depends
-from sqlmodel import col, desc
+from sqlmodel import col, desc, select
 from sqlmodel.sql.expression import and_, or_
 
 from backend.models import Job, JobStatus
@@ -23,6 +23,14 @@ class JobRepository(DBRepositoryImpl[Job]):
     @property
     def order_by(self) -> OrderByType:
         return [desc(col(Job.created_at))]
+
+    async def find_by_session(self, agent: str, device: str, session_id: str) -> Job | None:
+        query = select(Job).where(
+            col(Job.agent) == agent,
+            col(Job.device) == device,
+            col(Job.session_id) == session_id,
+        )
+        return (await self.session.exec(query)).first()
 
     async def claim_next(self, worker: str) -> Job | None:
         pending = await self.list(

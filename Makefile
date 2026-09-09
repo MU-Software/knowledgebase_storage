@@ -50,6 +50,6 @@ docker-build:
 	$(CONTAINER_ENGINE) build -f dockerfiles/backend.dockerfile -t $(IMAGE_NAME):$(TAG_NAME) .
 
 lint:
-	uv run ruff check backend hooks
-	uv run ruff format --check backend hooks
+	uv run ruff check backend hooks tools
+	uv run ruff format --check backend hooks tools
 	uv run mypy backend

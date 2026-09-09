@@ -5,7 +5,7 @@ from typing import TYPE_CHECKING, Annotated
 
 from fastapi import Depends
 
-from backend.errors import ResourceNotFoundError
+from backend.errors import InvalidNotePathError, ResourceNotFoundError
 from backend.repositories import FSRepositoryImpl
 from backend.schemas import NoteDetail, NoteSummary
 
@@ -33,6 +33,11 @@ class NoteRepository(FSRepositoryImpl):
         if (target := self.resolve(relative_path)) is None:
             raise ResourceNotFoundError(self.resource)
         return NoteDetail.from_markdown_file(target, self.root)
+
+    def write(self, relative_path: str, content: str) -> str:
+        if self.contain(relative_path) is None or not relative_path.endswith(self.suffix):
+            raise InvalidNotePathError(relative_path)
+        return super().write(relative_path, content)
 
     def grep(self, needle: str, limit: int) -> list[NoteSummary]:
         hits: list[NoteSummary] = []

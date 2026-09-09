@@ -32,8 +32,12 @@ class JobService(ServiceImpl[JobRepository]):
     notes: noteServiceDI
     runtime: runtimeSettingRepositoryDI
 
-    async def enqueue(self, payload: JobBase) -> Job:
-        return await self.repository.save(Job(**payload.model_dump(), created_at=datetime.now(UTC)))
+    async def enqueue(self, payload: JobBase) -> tuple[Job, bool]:
+        existing = await self.repository.find_by_session(payload.agent, payload.device, payload.session_id)
+        if existing is not None:
+            return existing, False
+        job = Job(**payload.model_dump(), created_at=datetime.now(UTC))
+        return await self.repository.save(job), True
 
     async def retrieve(self, job_id: UUID, *, lock: bool = False) -> Job:
         return await self.repository.retrieve_by_id(job_id, with_for_update=lock)

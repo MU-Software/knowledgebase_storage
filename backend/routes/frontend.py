@@ -5,7 +5,7 @@ from typing import TYPE_CHECKING
 from fastapi import Response, status
 from fastapi.responses import FileResponse, JSONResponse
 
-from backend.errors import ResourceNotFoundError, StaleClaimError
+from backend.errors import InvalidNotePathError, ResourceNotFoundError, StaleClaimError
 from backend.settings import FRONTEND_PATH
 
 if TYPE_CHECKING:
@@ -18,6 +18,10 @@ def register_frontend(app: FastAPI) -> None:
     @app.exception_handler(ResourceNotFoundError)
     async def domain_not_found(request: Request, exc: ResourceNotFoundError) -> Response:  # noqa: ARG001
         return JSONResponse({"detail": str(exc)}, status_code=status.HTTP_404_NOT_FOUND)
+
+    @app.exception_handler(InvalidNotePathError)
+    async def invalid_note_path(request: Request, exc: InvalidNotePathError) -> Response:  # noqa: ARG001
+        return JSONResponse({"detail": str(exc)}, status_code=status.HTTP_400_BAD_REQUEST)
 
     @app.exception_handler(StaleClaimError)
     async def stale_claim(request: Request, exc: StaleClaimError) -> Response:  # noqa: ARG001

@@ -5,7 +5,7 @@ from enum import StrEnum
 from typing import Any
 from uuid import UUID, uuid4
 
-from sqlalchemy import DateTime, Enum, Index, text
+from sqlalchemy import DateTime, Enum, Index, UniqueConstraint, text
 from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.sql.functions import now
 from sqlmodel import Field, SQLModel
@@ -73,7 +73,10 @@ class JobBase(SQLModel):
 
 class Job(UUIDMixin, TimestampMixin, JobBase, table=True):
     __tablename__ = "job"
-    __table_args__ = (Index("ix_job_pending_created", "status", "created_at"),)
+    __table_args__ = (
+        Index("ix_job_pending_created", "status", "created_at"),
+        UniqueConstraint("agent", "device", "session_id", name="uq_job_session"),
+    )
 
     status: JobStatus = Field(default=JobStatus.PENDING, sa_type=enum_type(JobStatus))
 

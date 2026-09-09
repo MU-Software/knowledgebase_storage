@@ -24,3 +24,8 @@ class ReduceNotConvergingError(DomainError):
 class ContextTooSmallError(DomainError):
     def __init__(self, context_tokens: int, minimum: int) -> None:
         super().__init__(f"context_tokens {context_tokens} leaves no room for the prompt; needs at least {minimum}")
+
+
+class InvalidNotePathError(DomainError):
+    def __init__(self, path: str) -> None:
+        super().__init__(f"note path must stay inside the notes directory and end with .md: {path}")
