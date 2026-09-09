@@ -1,0 +1,22 @@
+name: knowledgebase-storage-dev
+
+services:
+  postgres:
+    image: postgres:18.1
+    environment:
+      TZ: Asia/Seoul
+      PGTZ: Asia/Seoul
+      POSTGRES_DB: knowledgebase
+      POSTGRES_USER: knowledgebase
+      POSTGRES_PASSWORD: knowledgebase
+    ports: ["127.0.0.1:5433:5432"]
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U knowledgebase -d knowledgebase"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+    volumes:
+      - postgres-data:/var/lib/postgresql
+
+volumes:
+  postgres-data:

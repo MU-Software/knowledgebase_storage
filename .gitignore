@@ -1,0 +1,13 @@
+__pycache__/
+*.py[cod]
+.venv/
+.notes/
+.env
+dotenv/.env.*
+!dotenv/.env.example
+node_modules/
+dist/
+backend/frontend/
+.ruff_cache/
+.mypy_cache/
+*.tsbuildinfo
