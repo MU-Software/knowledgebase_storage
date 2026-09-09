@@ -30,6 +30,8 @@ class LlamaCppSummarizer(Summarizer):
             "model": self.model,
             "messages": [{"role": "system", "content": system}, {"role": "user", "content": user}],
             "temperature": 0.2,
+            # summarizing is extraction, not deduction; non-reasoning templates ignore this
+            "chat_template_kwargs": {"enable_thinking": False},
         }
         if structured:
             payload["response_format"] = {

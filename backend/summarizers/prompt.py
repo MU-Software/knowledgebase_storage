@@ -29,7 +29,16 @@ SINGLE_INSTRUCTION = """\
 Summarize the session below into a single note.
 """
 
-RESULT_JSON_SCHEMA = SummaryResult.model_json_schema()
+
+def _require_every_field(schema: dict[str, Any]) -> dict[str, Any]:
+    """Defaulted fields drop out of `required`, and a constrained decoder then skips them."""
+    for definition in (schema, *schema.get("$defs", {}).values()):
+        if "properties" in definition:
+            definition["required"] = list(definition["properties"])
+    return schema
+
+
+RESULT_JSON_SCHEMA = _require_every_field(SummaryResult.model_json_schema())
 
 _CHARS_PER_TOKEN = 2.0
 
