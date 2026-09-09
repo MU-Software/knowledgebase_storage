@@ -32,6 +32,8 @@ export const useSaveProvider = () => {
   })
 }
 
+export const useTestProvider = () => useMutation({ mutationFn: api.testProvider })
+
 export const useDeleteProvider = () => {
   const client = useQueryClient()
   return useMutation({

@@ -1,8 +1,8 @@
-import { Box, Button, Checkbox, MenuItem, Paper, Stack, TextField, Typography } from '@mui/material'
-import type { FormEvent, ReactNode } from 'react'
+import { Alert, Box, Button, Checkbox, CircularProgress, MenuItem, Paper, Stack, TextField, Typography } from '@mui/material'
+import type { FormEvent, MouseEvent, ReactNode } from 'react'
 
-import type { LLMProvider, RuntimeSetting } from '../api'
-import { useDeleteProvider, useProviders, useSaveProvider, useSaveSettings, useSettings } from '../hooks'
+import type { LLMProvider, ProviderTestResult, RuntimeSetting } from '../api'
+import { useDeleteProvider, useProviders, useSaveProvider, useSaveSettings, useSettings, useTestProvider } from '../hooks'
 
 const LABEL_WIDTH = 220
 const FORM_WIDTH = 560
@@ -30,6 +30,8 @@ const PROVIDER_FIELDS: Field<keyof LLMProvider | 'api_key'>[] = [
   { key: 'connect_timeout_seconds', label: 'Connect timeout (s)', type: 'number', step: 'any' },
   { key: 'timeout_seconds', label: 'Request timeout (s)', type: 'number', step: 'any' },
 ]
+
+const noop = () => undefined
 
 const formValues = (form: HTMLFormElement) => {
   const entries = [...new FormData(form).entries()].filter(([, value]) => value !== '')
@@ -74,20 +76,45 @@ const RuntimeForm = () => {
   )
 }
 
+const took = (ms: number) => (ms < 1000 ? `${ms}ms` : `${(ms / 1000).toFixed(1)}s`)
+
+const WRAP = { whiteSpace: 'pre-wrap', wordBreak: 'break-word' } as const
+
+const TestOutcome = ({ result }: { result: ProviderTestResult }) => (
+  <Alert severity={result.ok ? 'success' : 'error'} sx={WRAP}>
+    {result.ok ? `Answered in ${took(result.latency_ms)}, titling the note “${result.detail}”.` : result.detail}
+  </Alert>
+)
+
 const ProviderForm = ({ provider }: { provider?: LLMProvider }) => {
   const save = useSaveProvider()
+  const test = useTestProvider()
   const remove = useDeleteProvider()
   const prefix = provider?.id ?? 'new'
 
-  const submit = (event: FormEvent<HTMLFormElement>) => {
-    event.preventDefault()
-    const values = formValues(event.currentTarget)
+  const persist = (form: HTMLFormElement) => {
+    const values = formValues(form)
     const patch: Record<string, unknown> = { ...values, enabled: values.enabled === 'on' }
     for (const { key, type } of PROVIDER_FIELDS) {
       if (type === 'number' && patch[key] !== undefined) patch[key] = Number(patch[key])
     }
-    save.mutate({ id: provider?.id, patch })
+    test.reset()
+    return save.mutateAsync({ id: provider?.id, patch })
   }
+
+  const submit = (event: FormEvent<HTMLFormElement>) => {
+    event.preventDefault()
+    const form = event.currentTarget
+    // a created provider gets its own form below, so leave this one empty for the next one
+    persist(form).then(() => !provider && form.reset(), noop)
+  }
+
+  const saveAndTest = (event: MouseEvent<HTMLButtonElement>) => {
+    const form = event.currentTarget.form
+    if (form) persist(form).then((saved) => test.mutate(saved.id), noop)
+  }
+
+  const busy = save.isPending || test.isPending
 
   return (
     <Paper component="form" onSubmit={submit} sx={{ p: 2, mb: 2, maxWidth: FORM_WIDTH }}>
@@ -116,14 +143,22 @@ const ProviderForm = ({ provider }: { provider?: LLMProvider }) => {
         </FieldRow>
       </Stack>
       <Stack direction="row" spacing={1} sx={{ mt: 2 }}>
-        <Button type="submit" variant="contained" disabled={save.isPending}>
+        <Button type="submit" variant="contained" disabled={busy}>
           {provider ? 'Update' : 'Add'}
+        </Button>
+        <Button onClick={saveAndTest} disabled={busy} startIcon={test.isPending ? <CircularProgress size={16} /> : undefined}>
+          {test.isPending ? 'Calling…' : 'Save & test'}
         </Button>
         {provider && (
           <Button color="error" onClick={() => remove.mutate(provider.id)} disabled={remove.isPending}>
             Delete
           </Button>
         )}
+      </Stack>
+      <Stack spacing={1} sx={{ mt: save.error || test.error || test.data ? 2 : 0 }}>
+        {save.error && <Alert severity="error" sx={WRAP}>{`Could not save: ${save.error.message}`}</Alert>}
+        {test.error && <Alert severity="error" sx={WRAP}>{`Could not run the test: ${test.error.message}`}</Alert>}
+        {test.data && <TestOutcome result={test.data} />}
       </Stack>
     </Paper>
   )
@@ -139,7 +174,8 @@ const Settings = () => {
         LLM providers
       </Typography>
       <Typography variant="body2" sx={{ mb: 2 }}>
-        Tried in priority order. A provider is skipped until the job is older than its minimum age.
+        Tried in priority order. A provider is skipped until the job is older than its minimum age. “Save & test” summarizes a throwaway transcript
+        with the saved provider, so a self-hosted base URL has to be reachable from the API server.
       </Typography>
       {data.map((provider) => (
         <ProviderForm key={provider.id} provider={provider} />

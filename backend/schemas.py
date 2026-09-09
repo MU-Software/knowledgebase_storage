@@ -141,6 +141,12 @@ class LLMProviderResolved(LLMProviderPublic):
     api_key: str
 
 
+class ProviderTestResult(BaseModel):
+    ok: bool
+    latency_ms: int
+    detail: str = Field(default="", description="the note title the provider produced, or the error that stopped it")
+
+
 class WorkerConfig(BaseModel):
     document_language: str
     poll_interval_seconds: int

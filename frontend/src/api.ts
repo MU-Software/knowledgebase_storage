@@ -31,9 +31,18 @@ export type Job = {
   completed_at: string | null
 }
 
+async function failure(response: Response): Promise<Error> {
+  const detail = await response
+    .clone()
+    .json()
+    .then((body: { detail?: unknown }) => (typeof body.detail === 'string' ? body.detail : JSON.stringify(body.detail)))
+    .catch(() => '')
+  return new Error(detail ? `${response.status} ${detail}` : `${response.status} ${response.statusText}`)
+}
+
 async function get<T>(path: string): Promise<T> {
   const response = await fetch(`/api${path}`)
-  if (!response.ok) throw new Error(`${response.status} ${response.statusText}`)
+  if (!response.ok) throw await failure(response)
   return (await response.json()) as T
 }
 
@@ -44,6 +53,7 @@ export const api = {
   createProvider: (provider: Partial<LLMProvider> & { api_key?: string }) => send<LLMProvider>('POST', '/llm-providers', provider),
   updateProvider: (id: string, patch: Partial<LLMProvider> & { api_key?: string }) => send<LLMProvider>('PATCH', `/llm-providers/${id}`, patch),
   deleteProvider: (id: string) => send<void>('DELETE', `/llm-providers/${id}`),
+  testProvider: (id: string) => send<ProviderTestResult>('POST', `/llm-providers/${id}/test`),
   projects: () => get<ProjectSummary[]>('/wiki/projects'),
   notes: (project?: string) => get<NoteSummary[]>(`/wiki/notes${project ? `?project=${encodeURIComponent(project)}` : ''}`),
   note: (path: string) => get<NoteDetail>(`/wiki/notes/${path}`),
@@ -60,6 +70,12 @@ export type RuntimeSetting = {
   maintenance_interval_seconds: number
   worker_poll_interval_seconds: number
   updated_at: string
+}
+
+export type ProviderTestResult = {
+  ok: boolean
+  latency_ms: number
+  detail: string
 }
 
 export type LLMProvider = {
@@ -84,6 +100,6 @@ async function send<T>(method: string, path: string, body?: unknown): Promise<T>
     headers: { 'Content-Type': 'application/json' },
     body: body === undefined ? undefined : JSON.stringify(body),
   })
-  if (!response.ok) throw new Error(`${response.status} ${response.statusText}`)
+  if (!response.ok) throw await failure(response)
   return (response.status === 204 ? undefined : await response.json()) as T
 }

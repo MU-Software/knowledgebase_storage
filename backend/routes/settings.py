@@ -14,16 +14,22 @@ from backend.schemas import (
     LLMProviderPublic,
     LLMProviderResolved,
     LLMProviderUpdate,
+    ProviderTestResult,
     RuntimeSettingPublic,
     RuntimeSettingUpdate,
     WorkerConfig,
 )
+from backend.summarizers.probe import probe
 
 router = APIRouter(tags=["settings"])
 
 
 def _public(provider: LLMProvider) -> LLMProviderPublic:
     return LLMProviderPublic(**provider.model_dump(exclude={"api_key"}), has_api_key=bool(provider.api_key))
+
+
+def _resolved(provider: LLMProvider) -> LLMProviderResolved:
+    return LLMProviderResolved(**provider.model_dump(), has_api_key=bool(provider.api_key))
 
 
 @router.get("/settings")
@@ -55,6 +61,17 @@ async def update_provider(provider_id: UUID, payload: LLMProviderUpdate, reposit
     return _public(await repository.save(provider))
 
 
+@router.post("/llm-providers/{provider_id}/test")
+async def test_provider(
+    provider_id: UUID,
+    repository: llmProviderRepositoryDI,
+    settings: runtimeSettingRepositoryDI,
+) -> ProviderTestResult:
+    """Summarize a throwaway transcript with this provider, whether or not it is enabled."""
+    provider = await repository.retrieve_by_id(provider_id)
+    return await probe(_resolved(provider), (await settings.get()).document_language)
+
+
 @router.delete("/llm-providers/{provider_id}", status_code=status.HTTP_204_NO_CONTENT)
 async def delete_provider(provider_id: UUID, repository: llmProviderRepositoryDI) -> None:
     await repository.delete(await repository.retrieve_by_id(provider_id))
@@ -71,7 +88,7 @@ async def worker_config(
     config = WorkerConfig(
         document_language=runtime.document_language,
         poll_interval_seconds=runtime.worker_poll_interval_seconds,
-        providers=[LLMProviderResolved(**provider.model_dump(), has_api_key=bool(provider.api_key)) for provider in await providers.list_active()],
+        providers=[_resolved(provider) for provider in await providers.list_active()],
     )
     etag = f'W/"{sha256(config.model_dump_json().encode()).hexdigest()[:32]}"'
     if if_none_match == etag:
