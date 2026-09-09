@@ -2,6 +2,7 @@
   "name": "knowledgebase-storage-frontend",
   "private": true,
   "type": "module",
+  "packageManager": "pnpm@12.3.4",
   "scripts": {
     "dev": "vite",
     "build": "tsc -b && vite build",
