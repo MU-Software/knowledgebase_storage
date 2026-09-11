@@ -8,8 +8,9 @@ sends what it finds to the knowledgebase API. Run it once per origin device.
 from __future__ import annotations
 
 import argparse
+import functools
 import json
-import re
+import subprocess
 import sys
 import tarfile
 import urllib.error
@@ -20,7 +21,8 @@ from dataclasses import dataclass, field
 from pathlib import Path, PurePosixPath
 
 TEXT_BLOCK_TYPES = {"text", "input_text", "output_text"}
-FRONTMATTER = re.compile(r"\A---\n(.*?)\n---\n(.*)\Z", re.DOTALL)
+NON_PROJECT_DIRS = {Path.home(), Path("/tmp"), Path("/var/tmp"), Path("/")}  # noqa: S108
+CODEX_SESSION_PATTERNS = ("sessions/*/*/*/*.jsonl", "archived_sessions/*.jsonl")
 
 
 @dataclass
@@ -121,12 +123,20 @@ def read_claude_session(source: Source, name: str) -> Session | None:
     return Session("claude-code", session_id, cwd, stamps[0], stamps[-1], messages)
 
 
+def is_subagent(meta: dict) -> bool:
+    return meta.get("thread_source", "user") != "user" or isinstance(meta.get("source"), dict)
+
+
 def read_codex_session(source: Source, name: str) -> Session | None:
     session_id, cwd, stamps, messages = PurePosixPath(name).stem, None, [], []
+    meta_seen = False
     for record in source.lines(name):
         payload = record.get("payload") or {}
-        if record.get("type") == "session_meta":
-            session_id = payload.get("session_id") or session_id
+        if record.get("type") == "session_meta" and not meta_seen:
+            if is_subagent(payload):
+                return None
+            meta_seen = True
+            session_id = payload.get("id") or session_id
             cwd = payload.get("cwd") or (payload.get("turn_context") or {}).get("cwd") or cwd
         if stamp := record.get("timestamp"):
             stamps.append(stamp)
@@ -142,59 +152,32 @@ def read_codex_session(source: Source, name: str) -> Session | None:
     return Session("codex", session_id, cwd, stamps[0], stamps[-1], messages)
 
 
-def project_of(cwd: str | None, fallback: str) -> tuple[str, str]:
-    if not cwd:
-        return fallback, "cwd"
-    name = PurePosixPath(cwd).name
-    return (name or fallback), "cwd"
+def _git(cwd: Path, *args: str) -> str | None:
+    try:
+        out = subprocess.run(  # noqa: S603
+            ["git", *args],  # noqa: S607
+            cwd=cwd,
+            capture_output=True,
+            text=True,
+            timeout=2,
+            check=False,
+        )
+    except (OSError, subprocess.SubprocessError):
+        return None
+    return out.stdout.strip() if out.returncode == 0 and out.stdout.strip() else None
 
 
-def parse_frontmatter(text: str) -> tuple[dict, str]:
-    match = FRONTMATTER.match(text)
-    if not match:
-        return {}, text
-    meta: dict = {}
-    stack: list[tuple[int, dict]] = [(0, meta)]
-    for line in match.group(1).splitlines():
-        if not line.strip() or line.lstrip().startswith("#"):
-            continue
-        indent = len(line) - len(line.lstrip())
-        while len(stack) > 1 and indent <= stack[-1][0]:
-            stack.pop()
-        key, _, value = line.strip().partition(":")
-        value = value.strip()
-        if value:
-            stack[-1][1][key.strip()] = value
-        else:
-            child: dict = {}
-            stack[-1][1][key.strip()] = child
-            stack.append((indent, child))
-    return meta, match.group(2)
-
-
-def memory_note(meta: dict, body: str, project: str, device: str, relative: str) -> str:
-    name = meta.get("name") or PurePosixPath(relative).stem
-    description = meta.get("description", "")
-    kind = (meta.get("metadata") or {}).get("type", "memory")
-    origin = (meta.get("metadata") or {}).get("originSessionId", "")
-    tags = [f"project/{project}", f"type/{kind}", f"device/{device}", "imported/memory"]
-    lines = [
-        "---",
-        f"title: {name}",
-        "type: note",
-        "tags:",
-        *[f"- {tag}" for tag in tags],
-        "source:",
-        "  agent: claude-code",
-        f"  device: {device}",
-        f"  origin: {relative}",
-    ]
-    if origin:
-        lines.append(f"  session_id: {origin}")
-    lines += ["---", "", f"# {name}", ""]
-    if description:
-        lines += [description, ""]
-    return "\n".join(lines) + body.strip() + "\n"
+@functools.cache
+def project_of(cwd: str | None) -> tuple[str, str]:
+    path = Path(cwd) if cwd else None
+    if path is not None and path.is_dir():
+        if remote := _git(path, "remote", "get-url", "origin"):
+            return remote.rstrip("/").rsplit("/", 1)[-1].removesuffix(".git"), "remote"
+        if toplevel := _git(path, "rev-parse", "--show-toplevel"):
+            return Path(toplevel).name, "worktree"
+        if path.resolve() in NON_PROJECT_DIRS:
+            return "_scratch", "scratch"
+    return (PurePosixPath(cwd).name if cwd else "") or "unfiled", "cwd"
 
 
 class Client:
@@ -223,21 +206,19 @@ class Client:
 
 
 def import_memories(source: Source, client: Client, device: str, projects: dict[str, str]) -> tuple[int, int]:
-    sent = skipped = 0
+    holders: dict[str, list[str]] = {}
     for name in source.glob("projects/*/memory/*.md"):
-        if PurePosixPath(name).name == "MEMORY.md":
-            skipped += 1
-            continue
-        text = source.read(name).decode("utf-8", "replace")
-        meta, body = parse_frontmatter(text)
-        holder = PurePosixPath(name).parent.parent.name
-        project = projects.get(holder, holder.rsplit("-", 1)[-1] or "unfiled")
-        target = f"projects/{project}/memory/{PurePosixPath(name).stem}.md"
-        content = memory_note(meta, body, project, device, name)
-        if client.dry_run or client.send("PUT", "/api/wiki/notes", {"path": target, "content": content}) in (200, 201):
-            sent += 1
+        holders.setdefault(PurePosixPath(name).parent.parent.name, []).append(name)
+
+    sent = skipped = 0
+    for holder, names in holders.items():
+        project = project_of(projects[holder])[0] if holder in projects else holder.rsplit("-", 1)[-1] or "unfiled"
+        files = [{"name": PurePosixPath(name).name, "content": source.read(name).decode("utf-8", "replace")} for name in names]
+        payload = {"agent": "claude-code", "device": device, "project": project, "files": files}
+        if client.dry_run or client.send("PUT", "/api/wiki/memories", payload) == 200:  # noqa: PLR2004
+            sent += len(files)
         else:
-            skipped += 1
+            skipped += len(files)
     return sent, skipped
 
 
@@ -249,7 +230,7 @@ def import_sessions(source: Source, client: Client, plan: Plan) -> tuple[int, in
         if session is None or session.text_length < plan.min_chars:
             skipped += 1
             continue
-        project, inference = project_of(session.cwd, "unfiled")
+        project, inference = project_of(session.cwd)
         chars += session.text_length
         payload = {
             "agent": session.agent,
@@ -270,7 +251,7 @@ def import_sessions(source: Source, client: Client, plan: Plan) -> tuple[int, in
 
 
 def map_projects(source: Source) -> dict[str, str]:
-    """Recover each Claude project folder's real directory name from a session's cwd."""
+    """Recover each Claude project folder's working directory from a session's cwd."""
     mapping: dict[str, str] = {}
     for name in source.glob("projects/*/*.jsonl"):
         holder = PurePosixPath(name).parent.name
@@ -278,7 +259,7 @@ def map_projects(source: Source) -> dict[str, str]:
             continue
         for record in source.lines(name):
             if cwd := record.get("cwd"):
-                mapping[holder] = PurePosixPath(cwd).name
+                mapping[holder] = cwd
                 break
     return mapping
 
@@ -305,15 +286,17 @@ def main() -> int:
         projects = map_projects(source)
         sent, skipped = import_memories(source, client, args.device, projects)
         print(f"  claude memories : {sent} sent, {skipped} skipped")
-        plan = Plan(args.device, "projects/*/*.jsonl", read_claude_session, args.min_chars)
+        plan = Plan(args.device, "projects/*/*.jsonl", read_claude_session, min_chars=args.min_chars)
         sent, skipped, chars = import_sessions(source, client, plan)
         print(f"  claude sessions : {sent} sent, {skipped} skipped, {chars / 1024:.0f} KB text (~{chars / 2000:.0f}k tokens)")
 
     if args.codex:
         source = Source.open(args.codex)
-        plan = Plan(args.device, "sessions/*/*/*/*.jsonl", read_codex_session, args.min_chars)
-        sent, skipped, chars = import_sessions(source, client, plan)
-        print(f"  codex sessions  : {sent} sent, {skipped} skipped, {chars / 1024:.0f} KB text (~{chars / 2000:.0f}k tokens)")
+        for pattern in CODEX_SESSION_PATTERNS:
+            plan = Plan(args.device, pattern, read_codex_session, min_chars=args.min_chars)
+            sent, skipped, chars = import_sessions(source, client, plan)
+            label = PurePosixPath(pattern).parts[0]
+            print(f"  codex {label} : {sent} sent, {skipped} skipped, {chars / 1024:.0f} KB text (~{chars / 2000:.0f}k tokens)")
 
     return 0
 

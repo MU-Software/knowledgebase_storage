@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from datetime import datetime  # noqa: TC003
-from typing import TYPE_CHECKING, Any, Literal, Self
+from typing import TYPE_CHECKING, Annotated, Any, Literal, Self
 from uuid import UUID  # noqa: TC003
 
 import frontmatter
@@ -13,6 +13,7 @@ if TYPE_CHECKING:
     from pathlib import Path
 
 ObservationCategory = Literal["decision", "problem", "next", "fact", "idea"]
+MemoryFileName = Annotated[str, Field(pattern=r"^[^/\\]+\.md$")]
 
 PROJECT_PATH_SEGMENTS = 2
 
@@ -158,3 +159,21 @@ class WorkerConfig(BaseModel):
 class NoteWrite(BaseModel):
     path: str = Field(description="path under the notes directory, e.g. projects/foo/memory/bar.md")
     content: str
+
+
+class MemoryFile(BaseModel):
+    name: MemoryFileName
+    content: str
+
+
+class MemorySync(BaseModel):
+    agent: str
+    device: str
+    project: str
+    files: list[MemoryFile] = Field(default_factory=list)
+    deleted: list[MemoryFileName] = Field(default_factory=list)
+
+
+class MemorySyncResult(BaseModel):
+    written: list[str]
+    deleted: list[str]

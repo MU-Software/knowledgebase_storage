@@ -39,6 +39,18 @@ class NoteRepository(FSRepositoryImpl):
             raise InvalidNotePathError(relative_path)
         return super().write(relative_path, content)
 
+    def read_directory(self, relative_path: str) -> dict[str, str]:
+        base = self.contain(relative_path)
+        if base is None or not base.is_dir():
+            return {}
+        return {path.name: path.read_text(encoding="utf-8") for path in sorted(base.glob(f"*{self.suffix}"))}
+
+    def delete(self, relative_path: str) -> bool:
+        if (target := self.resolve(relative_path)) is None:
+            return False
+        target.unlink()
+        return True
+
     def grep(self, needle: str, limit: int) -> list[NoteSummary]:
         hits: list[NoteSummary] = []
         for path in self.iter_files():

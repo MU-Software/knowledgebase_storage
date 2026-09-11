@@ -4,7 +4,7 @@ from typing import Annotated
 
 from fastapi import APIRouter, Query, status
 
-from backend.schemas import NoteDetail, NoteSummary, NoteWrite, ProjectSummary
+from backend.schemas import MemoryFile, MemorySync, MemorySyncResult, NoteDetail, NoteSummary, NoteWrite, ProjectSummary
 from backend.services.notes import noteServiceDI
 
 router = APIRouter(prefix="/wiki", tags=["wiki"])
@@ -28,6 +28,16 @@ def note(path: str, service: noteServiceDI) -> NoteDetail:
 @router.put("/notes", status_code=status.HTTP_201_CREATED)
 def put_note(payload: NoteWrite, service: noteServiceDI) -> NoteDetail:
     return service.retrieve(service.store(payload.path, payload.content))
+
+
+@router.get("/memories")
+def memories(service: noteServiceDI, project: Annotated[str, Query(min_length=1)]) -> list[MemoryFile]:
+    return service.list_memories(project)
+
+
+@router.put("/memories")
+def sync_memories(payload: MemorySync, service: noteServiceDI) -> MemorySyncResult:
+    return service.sync_memories(payload)
 
 
 @router.get("/search")
