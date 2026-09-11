@@ -57,6 +57,10 @@ and served by FastAPI, so deployment carries no static-file paths.
 - Wiki: JWT sign-in. Create a user with `uv run python -m backend.cli create-user <name>`.
 - Hooks and the importer: an API key from the wiki's API keys page, sent as `X-API-Key`.
 - Worker: `WORKER_API_KEY` of the api.
+- Failed sign-ins are counted per client IP and per username; past the limits in the runtime settings,
+  sign-in answers 429. Behind a proxy that does not connect from 127.0.0.1, set `FORWARDED_ALLOW_IPS`
+  so uvicorn sees the real client IP.
+- `/docs`, `/redoc` and `/openapi.json` are served only when `DEBUG=true`.
 
 ## Hooks
 

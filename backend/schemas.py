@@ -111,6 +111,9 @@ class RuntimeSettingUpdate(BaseModel):
     maintenance_interval_seconds: int | None = Field(default=None, ge=5)
     worker_poll_interval_seconds: int | None = Field(default=None, ge=1)
     session_ttl_hours: int | None = Field(default=None, ge=1)
+    login_failure_window_minutes: int | None = Field(default=None, ge=1)
+    login_max_failures_per_ip: int | None = Field(default=None, ge=1)
+    login_max_failures_per_username: int | None = Field(default=None, ge=1)
 
 
 class RuntimeSettingPublic(RuntimeSettingBase):
@@ -185,7 +188,7 @@ class ProjectContext(BaseModel):
 
 
 class LoginRequest(BaseModel):
-    username: str = Field(min_length=1)
+    username: str = Field(min_length=1, max_length=255)
     password: str = Field(min_length=1)
 
 

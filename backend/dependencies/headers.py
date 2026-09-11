@@ -4,7 +4,7 @@ from collections.abc import Callable
 from datetime import datetime
 from typing import Annotated
 
-from fastapi import Depends, Response
+from fastapi import Depends, Request, Response
 from fastapi.security import APIKeyHeader, HTTPAuthorizationCredentials, HTTPBearer
 
 from backend.consts.cookies import CookieKey
@@ -16,6 +16,13 @@ csrfTokenDI = Annotated[str | None, CookieKey.CSRF_TOKEN.as_fastapi_cookie()]  #
 refreshTokenCookieDI = Annotated[str | None, CookieKey.REFRESH_TOKEN.as_fastapi_cookie()]  # noqa: N816
 apiKeyHeaderDI = Annotated[str | None, Depends(APIKeyHeader(name="X-API-Key", auto_error=False))]  # noqa: N816
 bearerDI = Annotated[HTTPAuthorizationCredentials | None, Depends(HTTPBearer(auto_error=False))]  # noqa: N816
+
+
+def get_client_ip(request: Request) -> str:
+    return request.client.host if request.client else "unknown"
+
+
+clientIpDI = Annotated[str, Depends(get_client_ip)]  # noqa: N816
 
 
 def require_csrf_token(csrf_token: csrfTokenDI = None) -> str:

@@ -6,6 +6,7 @@ from datetime import UTC, datetime, timedelta
 from hmac import compare_digest
 from typing import TYPE_CHECKING, Annotated
 
+from argon2.exceptions import InvalidHashError, VerificationError
 from fastapi import Depends
 
 from backend.consts.cookies import CookieKey
@@ -13,7 +14,7 @@ from backend.dependencies import settingsDI
 from backend.dependencies.headers import cookieDeleterDI, cookieSetterDI
 from backend.errors import AuthNError
 from backend.models import User
-from backend.repositories.auth import UserRepository, apiKeyRepositoryDI, userRepositoryDI
+from backend.repositories.auth import UserRepository, apiKeyRepositoryDI, loginFailureRepositoryDI, userRepositoryDI
 from backend.repositories.setting import runtimeSettingRepositoryDI
 from backend.schemas import AccessTokenResponse
 from backend.services import ServiceImpl
@@ -39,6 +40,7 @@ class AuthContext:
 class AuthService(ServiceImpl[UserRepository]):
     repository: userRepositoryDI
     api_keys: apiKeyRepositoryDI
+    login_failures: loginFailureRepositoryDI
     runtime: runtimeSettingRepositoryDI
     settings: settingsDI
     cookie_setter: cookieSetterDI
@@ -47,6 +49,14 @@ class AuthService(ServiceImpl[UserRepository]):
     @property
     def secret_key(self) -> str:
         return self.settings.secret_key.get_secret_value()
+
+    @staticmethod
+    def password_matches(user: User | None, password: str) -> bool:
+        try:
+            (user or PLACEHOLDER_USER).compare_password(password)
+        except (VerificationError, InvalidHashError):
+            return False
+        return user is not None
 
     async def refresh_token_ttl(self) -> timedelta:
         return timedelta(hours=(await self.runtime.get()).session_ttl_hours)
@@ -59,12 +69,19 @@ class AuthService(ServiceImpl[UserRepository]):
         self.cookie_setter(CookieKey.REFRESH_TOKEN, refresh.jwt, refresh.exp)
         return AccessTokenResponse(access_token=refresh.to_access_token(csrf_token).jwt)
 
-    async def login(self, payload: LoginRequest, csrf_token: str) -> AccessTokenResponse:
+    async def login(self, payload: LoginRequest, csrf_token: str, client_ip: str) -> AccessTokenResponse:
+        runtime = await self.runtime.get()
+        since = datetime.now(UTC) - timedelta(minutes=runtime.login_failure_window_minutes)
+        by_username, by_ip = await self.login_failures.recent_counts(payload.username, client_ip, since)
+        if by_username >= runtime.login_max_failures_per_username or by_ip >= runtime.login_max_failures_per_ip:
+            AuthNError.SIGNIN_THROTTLED.raise_()
+
         user = await self.repository.find_by_username(payload.username)
-        (user or PLACEHOLDER_USER).compare_password(payload.password)
-        if user is None:
+        if not self.password_matches(user, payload.password) or user is None:
+            await self.login_failures.record(payload.username, client_ip)
             AuthNError.SIGNIN_FAILED.raise_()
 
+        await self.login_failures.clear(payload.username, client_ip)
         user.last_login_at = datetime.now(UTC)
         await self.repository.save(user)
 

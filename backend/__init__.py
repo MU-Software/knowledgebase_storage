@@ -3,12 +3,13 @@ from __future__ import annotations
 import asyncio
 import logging
 from contextlib import asynccontextmanager, suppress
-from datetime import timedelta
+from datetime import UTC, datetime, timedelta
 from typing import TYPE_CHECKING
 
 from fastapi import FastAPI
 
 from backend.error_handlers import get_error_handlers
+from backend.repositories.auth import LoginFailureRepository
 from backend.repositories.job import JobRepository
 from backend.repositories.setting import RuntimeSettingRepository
 from backend.routes import register_routes
@@ -38,6 +39,9 @@ async def lifespan(_app: FastAPI) -> AsyncIterator[None]:
                         logger.info("returned %d job(s) abandoned mid-run to the queue", reclaimed)
                     if purged := await repository.purge_transcripts(timedelta(hours=runtime.transcript_retention_hours)):
                         logger.info("discarded %d transcript(s) past their retention window", purged)
+                    window_start = datetime.now(UTC) - timedelta(minutes=runtime.login_failure_window_minutes)
+                    if forgotten := await LoginFailureRepository(session=session).purge(window_start):
+                        logger.info("forgot %d sign-in failure(s) past their window", forgotten)
                     interval = runtime.maintenance_interval_seconds
             except Exception:
                 logger.exception("janitorial pass failed")
@@ -61,6 +65,9 @@ def create_app() -> FastAPI:
         debug=settings.debug,
         lifespan=lifespan,
         exception_handlers=get_error_handlers(),
+        docs_url="/docs" if settings.debug else None,
+        redoc_url="/redoc" if settings.debug else None,
+        openapi_url="/openapi.json" if settings.debug else None,
     )
     register_routes(app)
     return app

@@ -127,6 +127,9 @@ class RuntimeSettingBase(SQLModel):
     maintenance_interval_seconds: int = Field(default=60, ge=5)
     worker_poll_interval_seconds: int = Field(default=15, ge=1)
     session_ttl_hours: int = Field(default=168, ge=1)
+    login_failure_window_minutes: int = Field(default=15, ge=1)
+    login_max_failures_per_ip: int = Field(default=5, ge=1)
+    login_max_failures_per_username: int = Field(default=20, ge=1)
 
 
 class RuntimeSetting(TimestampMixin, RuntimeSettingBase, table=True):
@@ -181,3 +184,11 @@ class APIKey(UUIDMixin, TimestampMixin, SoftDeleteMixin, table=True):
     prefix: str
     key_digest: str = Field(unique=True, index=True)
     last_used_at: datetime | None = Field(default=None, sa_type=DateTime(timezone=True))
+
+
+class LoginFailure(UUIDMixin, table=True):
+    __tablename__ = "login_failure"
+
+    username: str = Field(index=True)
+    client_ip: str = Field(index=True)
+    created_at: datetime = Field(sa_type=DateTime(timezone=True), sa_column_kwargs={"server_default": text("now()")}, index=True)

@@ -6,10 +6,11 @@ from hashlib import sha256
 from typing import TYPE_CHECKING, Annotated
 
 from fastapi import Depends
+from sqlalchemy import delete, func
 from sqlmodel import col, desc, select
 
 from backend.errors import ClientError
-from backend.models import API_KEY_PREFIX, APIKey, User
+from backend.models import API_KEY_PREFIX, APIKey, LoginFailure, User
 from backend.repositories import DBRepositoryImpl, OrderByType
 
 if TYPE_CHECKING:
@@ -70,5 +71,31 @@ class APIKeyRepository(DBRepositoryImpl[APIKey]):
         await self.save(api_key)
 
 
+class LoginFailureRepository(DBRepositoryImpl[LoginFailure]):
+    model = LoginFailure
+    resource = "login failure"
+
+    async def recent_counts(self, username: str, client_ip: str, since: datetime) -> tuple[int, int]:
+        query = select(
+            func.count().filter(col(LoginFailure.username) == username),
+            func.count().filter(col(LoginFailure.client_ip) == client_ip),
+        ).where(col(LoginFailure.created_at) >= since)
+        by_username, by_ip = (await self.session.exec(query)).one()
+        return int(by_username), int(by_ip)
+
+    async def record(self, username: str, client_ip: str) -> None:
+        await self.save(LoginFailure(username=username, client_ip=client_ip, created_at=datetime.now(UTC)))
+
+    async def clear(self, username: str, client_ip: str) -> None:
+        await self.session.exec(delete(LoginFailure).where(col(LoginFailure.username) == username, col(LoginFailure.client_ip) == client_ip))
+        await self.session.commit()
+
+    async def purge(self, before: datetime) -> int:
+        result = await self.session.exec(delete(LoginFailure).where(col(LoginFailure.created_at) < before))
+        await self.session.commit()
+        return int(result.rowcount or 0)
+
+
 userRepositoryDI = Annotated[UserRepository, Depends(UserRepository)]  # noqa: N816
 apiKeyRepositoryDI = Annotated[APIKeyRepository, Depends(APIKeyRepository)]  # noqa: N816
+loginFailureRepositoryDI = Annotated[LoginFailureRepository, Depends(LoginFailureRepository)]  # noqa: N816

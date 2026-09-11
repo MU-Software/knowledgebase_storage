@@ -19,6 +19,9 @@ const RUNTIME_FIELDS: Field<keyof RuntimeSetting>[] = [
   { key: 'maintenance_interval_seconds', label: 'Janitor interval (s)', type: 'number' },
   { key: 'worker_poll_interval_seconds', label: 'Worker poll (s)', type: 'number' },
   { key: 'session_ttl_hours', label: 'Login session (h)', type: 'number' },
+  { key: 'login_failure_window_minutes', label: 'Sign-in failure window (min)', type: 'number' },
+  { key: 'login_max_failures_per_ip', label: 'Max sign-in failures per IP', type: 'number' },
+  { key: 'login_max_failures_per_username', label: 'Max sign-in failures per user', type: 'number' },
 ]
 
 const PROVIDER_FIELDS: Field<keyof LLMProvider | 'api_key'>[] = [
@@ -176,8 +179,8 @@ const Settings = () => {
         LLM providers
       </Typography>
       <Typography variant="body2" sx={{ mb: 2 }}>
-        Tried in priority order. A provider is skipped until the session has been quiet for its minimum age. “Save & test” summarizes a throwaway transcript
-        with the saved provider, so a self-hosted base URL has to be reachable from the API server.
+        Tried in priority order. A provider is skipped until the session has been quiet for its minimum age. “Save & test” summarizes a throwaway
+        transcript with the saved provider, so a self-hosted base URL has to be reachable from the API server.
       </Typography>
       {data.map((provider) => (
         <ProviderForm key={provider.id} provider={provider} />

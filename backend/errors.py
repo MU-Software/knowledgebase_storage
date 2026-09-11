@@ -111,6 +111,7 @@ class AuthNError(ErrorEnum):
         "INVALID_REFRESH_TOKEN": ErrorStructDict(loc=["cookie", CookieKey.REFRESH_TOKEN.get_name()]),
         "INVALID_API_KEY": ErrorStructDict(loc=["header", "x-api-key"]),
         "SIGNIN_FAILED": ErrorStructDict(loc=["body", "username"]),
+        "SIGNIN_THROTTLED": ErrorStructDict(status_code=status.HTTP_429_TOO_MANY_REQUESTS),
         "AUTHN_FAILED_AS_HEADER_NOT_PROVIDED": ErrorStructDict(loc=["cookie", CookieKey.CSRF_TOKEN.get_name()]),
     }
 
@@ -119,6 +120,7 @@ class AuthNError(ErrorEnum):
     INVALID_API_KEY = "The API key is invalid, expired or deleted."
     SIGNIN_REQUIRED = "Sign in, or send an API key in the X-API-Key header."
     SIGNIN_FAILED = "Invalid username or password."
+    SIGNIN_THROTTLED = "Too many failed sign-in attempts. Try again in a few minutes."
     AUTHN_FAILED_AS_HEADER_NOT_PROVIDED = "The CSRF cookie is missing. Reload the page and try again."
 
 

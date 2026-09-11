@@ -172,6 +172,9 @@ export type RuntimeSetting = {
   maintenance_interval_seconds: number
   worker_poll_interval_seconds: number
   session_ttl_hours: number
+  login_failure_window_minutes: number
+  login_max_failures_per_ip: number
+  login_max_failures_per_username: number
   updated_at: string
 }
 

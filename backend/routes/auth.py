@@ -5,7 +5,7 @@ from uuid import UUID
 from fastapi import APIRouter, status
 
 from backend.dependencies.auth import signedInUserDI
-from backend.dependencies.headers import csrfTokenDI, refreshTokenCookieDI, requiredCsrfTokenDI
+from backend.dependencies.headers import clientIpDI, csrfTokenDI, refreshTokenCookieDI, requiredCsrfTokenDI
 from backend.schemas import AccessTokenResponse, APIKeyCreate, APIKeyCreated, APIKeyPublic, LoginRequest, UserPublic
 from backend.services.auth import authServiceDI
 
@@ -18,8 +18,8 @@ async def issue_csrf_token(service: authServiceDI, csrf_token: csrfTokenDI = Non
 
 
 @router.post("/login")
-async def login(payload: LoginRequest, csrf_token: requiredCsrfTokenDI, service: authServiceDI) -> AccessTokenResponse:
-    return await service.login(payload, csrf_token)
+async def login(payload: LoginRequest, csrf_token: requiredCsrfTokenDI, client_ip: clientIpDI, service: authServiceDI) -> AccessTokenResponse:
+    return await service.login(payload, csrf_token, client_ip)
 
 
 @router.get("/refresh")
