@@ -19,8 +19,6 @@ if TYPE_CHECKING:
     from collections.abc import Iterator
 
 API_BASE = os.environ.get("KBSTORE_API_BASE", "http://127.0.0.1:8006")
-PULL_BASE = os.environ.get("KBSTORE_PULL_BASE") or API_BASE
-PULL_AUTH = os.environ.get("KBSTORE_PULL_AUTH")
 API_KEY = os.environ.get("KBSTORE_API_KEY")
 TIMEOUT_SECONDS = float(os.environ.get("KBSTORE_TIMEOUT", "3"))
 MAX_MESSAGES = int(os.environ.get("KBSTORE_MAX_MESSAGES", "2000"))
@@ -115,11 +113,11 @@ def read_transcript(path: Path) -> tuple[str, str | None, list[dict]]:
     return agent, thread_id, messages[-MAX_MESSAGES:]
 
 
-def call(method: str, url: str, payload: dict | None = None, auth: str | None = None) -> object | None:
+def call(method: str, path: str, payload: dict | None = None) -> object | None:
     request = urllib.request.Request(  # noqa: S310
-        url,
+        f"{API_BASE}{path}",
         data=None if payload is None else json.dumps(payload, ensure_ascii=False).encode(),
-        headers={"Content-Type": "application/json", **({"X-API-Key": API_KEY} if API_KEY else {}), **({"Authorization": auth} if auth else {})},
+        headers={"Content-Type": "application/json", **({"X-API-Key": API_KEY} if API_KEY else {})},
         method=method,
     )
     try:
@@ -167,13 +165,13 @@ def push_memories(memory_dir: Path, fields: dict[str, str]) -> None:
     deleted = [name for name in synced if name not in digests]
     if not files and not deleted:
         return
-    if call("PUT", f"{API_BASE}/api/wiki/memories", {**fields, "files": files, "deleted": deleted}) is not None:
+    if call("PUT", "/api/wiki/memories", {**fields, "files": files, "deleted": deleted}) is not None:
         save_synced(memory_dir, fields["project"], digests)
 
 
 def pull_memories(memory_dir: Path, project: str) -> None:
     query = urllib.parse.urlencode({"project": project})
-    remote = call("GET", f"{PULL_BASE}/api/wiki/memories?{query}", auth=PULL_AUTH)
+    remote = call("GET", f"/api/wiki/memories?{query}")
     if not isinstance(remote, list) or not remote:
         return
 
@@ -205,7 +203,7 @@ def start_session(payload: dict, cwd: Path, memory_dir: Path | None) -> str:
             pull_memories(memory_dir, project)
 
     query = urllib.parse.urlencode({"project": project, "session_id": payload.get("session_id") or "", "memories": str(memory_dir is None).lower()})
-    result = call("GET", f"{PULL_BASE}/api/wiki/context?{query}", auth=PULL_AUTH)
+    result = call("GET", f"/api/wiki/context?{query}")
     return str(result.get("context") or "") if isinstance(result, dict) else ""
 
 
@@ -225,7 +223,7 @@ def capture(payload: dict, transcript: Path, cwd: Path) -> dict[str, str] | None
         "cwd": cwd.as_posix(),
         "transcript": messages,
     }
-    if messages and call("POST", f"{API_BASE}/api/jobs", job) is None:
+    if messages and call("POST", "/api/jobs", job) is None:
         return None
     return fields
 
