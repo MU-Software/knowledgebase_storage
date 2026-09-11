@@ -1,8 +1,10 @@
 from __future__ import annotations
 
+import json
 import logging
 from datetime import UTC, datetime, timedelta
-from typing import TYPE_CHECKING, Annotated
+from hashlib import sha256
+from typing import TYPE_CHECKING, Annotated, Any
 
 from fastapi import Depends
 from sqlalchemy import true
@@ -25,6 +27,11 @@ logger = logging.getLogger(__name__)
 
 BACKOFF_BASE_SECONDS = 60
 BACKOFF_CAP_SECONDS = 3600
+SETTLED_STATUSES = {JobStatus.DONE, JobStatus.FAILED}
+
+
+def transcript_digest(transcript: list[dict[str, Any]] | None) -> str:
+    return sha256(json.dumps(transcript, ensure_ascii=False, sort_keys=True).encode()).hexdigest()
 
 
 class JobService(ServiceImpl[JobRepository]):
@@ -33,11 +40,23 @@ class JobService(ServiceImpl[JobRepository]):
     runtime: runtimeSettingRepositoryDI
 
     async def enqueue(self, payload: JobBase) -> tuple[Job, bool]:
-        existing = await self.repository.find_by_session(payload.agent, payload.device, payload.session_id)
-        if existing is not None:
+        now, digest = datetime.now(UTC), transcript_digest(payload.transcript)
+        existing = await self.repository.find_by_session(payload.agent, payload.device, payload.session_id, lock=True)
+        if existing is None:
+            job = Job(**payload.model_dump(), created_at=now, last_activity_at=now, transcript_digest=digest)
+            return await self.repository.save(job), True
+        if existing.transcript_digest == digest:
             return existing, False
-        job = Job(**payload.model_dump(), created_at=datetime.now(UTC))
-        return await self.repository.save(job), True
+
+        existing.sqlmodel_update(payload.model_dump(exclude_none=True))
+        existing.transcript_digest = digest
+        existing.last_activity_at = now
+        if existing.status in SETTLED_STATUSES:
+            existing.status = JobStatus.PENDING
+            existing.attempts = 0
+            existing.last_error = None
+            existing.next_attempt_at = None
+        return await self.repository.save(existing), False
 
     async def retrieve(self, job_id: UUID, *, lock: bool = False) -> Job:
         return await self.repository.retrieve_by_id(job_id, with_for_update=lock)
@@ -66,11 +85,17 @@ class JobService(ServiceImpl[JobRepository]):
     async def complete(self, job: Job, result: SummaryResult, summarizer: str) -> Job:
         job.note_path = self.notes.write(job, result, summarizer)
         job.summarizer = summarizer
-        job.status = JobStatus.DONE
         job.completed_at = datetime.now(UTC)
-        job.transcript = None
         job.last_error = None
         job.claim_token = None
+        if job.claimed_at is not None and job.last_activity_at > job.claimed_at:
+            # the session went on while this was being summarized, so summarize it again once it goes quiet
+            job.status = JobStatus.PENDING
+            job.claimed_at = None
+            job.claimed_by = None
+        else:
+            job.status = JobStatus.DONE
+            job.transcript = None
         return await self.repository.save(job)
 
     async def fail(self, job: Job, error: str) -> Job:
@@ -89,7 +114,8 @@ class JobService(ServiceImpl[JobRepository]):
         return timedelta(seconds=min(BACKOFF_BASE_SECONDS * 2 ** (attempts - 1), BACKOFF_CAP_SECONDS))
 
     async def claim_next(self, worker: str) -> Job | None:
-        return await self.repository.claim_next(worker)
+        idle = timedelta(seconds=(await self.runtime.get()).job_idle_seconds)
+        return await self.repository.claim_next(worker, idle)
 
 
 jobServiceDI = Annotated[JobService, Depends(JobService)]  # noqa: N816

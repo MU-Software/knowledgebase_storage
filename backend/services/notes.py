@@ -61,7 +61,7 @@ class NoteService(ServiceImpl[NoteRepository]):
 
     def write(self, job: Job, result: SummaryResult, summarizer: str) -> str:
         day = (job.ended_at or job.created_at).strftime("%Y-%m-%d")
-        relative = f"projects/{slugify(job.project)}/log/{day}-{slugify(job.agent)}-{job.id}.md"
+        relative = job.note_path or f"projects/{slugify(job.project)}/log/{day}-{slugify(job.agent)}-{job.id}.md"
         return self.repository.write(relative, self.render(job, result, summarizer).rstrip() + "\n")
 
     def store(self, relative_path: str, content: str) -> str:

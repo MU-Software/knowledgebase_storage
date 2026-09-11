@@ -23,6 +23,7 @@ export type Job = {
   project: string
   project_inference: string
   created_at: string
+  last_activity_at: string
   claimed_by: string | null
   attempts: number
   last_error: string | null
@@ -65,6 +66,7 @@ export type RuntimeSetting = {
   document_language: string
   job_max_attempts: number
   job_batch_size: number
+  job_idle_seconds: number
   transcript_retention_hours: number
   stale_claim_hours: number
   maintenance_interval_seconds: number

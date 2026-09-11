@@ -44,6 +44,7 @@ class JobPublic(JobBase):
     id: UUID
     status: JobStatus
     created_at: datetime
+    last_activity_at: datetime
     claimed_at: datetime | None
     claimed_by: str | None
     attempts: int
@@ -103,6 +104,7 @@ class RuntimeSettingUpdate(BaseModel):
     document_language: str | None = None
     job_max_attempts: int | None = Field(default=None, ge=1)
     job_batch_size: int | None = Field(default=None, ge=1)
+    job_idle_seconds: int | None = Field(default=None, ge=0)
     transcript_retention_hours: int | None = Field(default=None, ge=1)
     stale_claim_hours: int | None = Field(default=None, ge=1)
     maintenance_interval_seconds: int | None = Field(default=None, ge=5)

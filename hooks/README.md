@@ -9,7 +9,7 @@
 ```json
 {
   "hooks": {
-    "SessionEnd": [
+    "Stop": [
       {
         "hooks": [{ "type": "command", "command": "/path/to/kbstore_hook.py", "timeout": 5 }]
       }
@@ -17,6 +17,8 @@
   }
 }
 ```
+
+Runs after every reply. The server keeps the latest snapshot and summarizes it after `job_idle_seconds` of inactivity.
 
 ## Environment
 

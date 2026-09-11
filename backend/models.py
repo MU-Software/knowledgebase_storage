@@ -79,6 +79,8 @@ class Job(UUIDMixin, TimestampMixin, JobBase, table=True):
     )
 
     status: JobStatus = Field(default=JobStatus.PENDING, sa_type=enum_type(JobStatus))
+    last_activity_at: datetime = Field(sa_type=DateTime(timezone=True), sa_column_kwargs={"server_default": text("now()")})
+    transcript_digest: str | None = None
 
     claimed_at: datetime | None = Field(default=None, sa_type=DateTime(timezone=True))
     claimed_by: str | None = None
@@ -96,6 +98,7 @@ class RuntimeSettingBase(SQLModel):
     document_language: str = "Korean"
     job_max_attempts: int = Field(default=3, ge=1)
     job_batch_size: int = Field(default=5, ge=1)
+    job_idle_seconds: int = Field(default=600, ge=0)
     transcript_retention_hours: int = Field(default=24, ge=1)
     stale_claim_hours: int = Field(default=1, ge=1)
     maintenance_interval_seconds: int = Field(default=60, ge=5)

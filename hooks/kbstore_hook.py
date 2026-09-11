@@ -18,6 +18,7 @@ AGENT = os.environ.get("KBSTORE_AGENT", "claude-code")
 MAX_MESSAGES = int(os.environ.get("KBSTORE_MAX_MESSAGES", "2000"))
 
 NON_PROJECT_DIRS = {Path.home(), Path("/tmp"), Path("/var/tmp"), Path("/")}  # noqa: S108
+TEXT_BLOCK_TYPES = {"text", "input_text", "output_text"}
 
 
 def _git(cwd: Path, *args: str) -> str | None:
@@ -49,6 +50,19 @@ def infer_project(cwd: Path) -> tuple[str, str]:
     return cwd.name, "cwd"
 
 
+def block_text(block: object) -> str:
+    if isinstance(block, str):
+        return block
+    if isinstance(block, dict) and block.get("type") in TEXT_BLOCK_TYPES:
+        return str(block.get("text", ""))
+    return ""
+
+
+def join_content(content: object) -> str:
+    parts = content if isinstance(content, list) else [content]
+    return "".join(block_text(p) for p in parts).strip()
+
+
 def read_transcript(path: Path) -> list[dict]:
     messages: list[dict] = []
     try:
@@ -62,8 +76,10 @@ def read_transcript(path: Path) -> list[dict]:
                 except json.JSONDecodeError:
                     continue
                 message = entry.get("message") or entry
-                if isinstance(message, dict) and message.get("role") in {"user", "assistant"}:
-                    messages.append({"role": message["role"], "content": message.get("content", "")})
+                if not isinstance(message, dict) or message.get("role") not in {"user", "assistant"}:
+                    continue
+                if text := join_content(message.get("content", "")):
+                    messages.append({"role": message["role"], "content": text})
     except OSError:
         return []
     return messages[-MAX_MESSAGES:]

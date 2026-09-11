@@ -24,19 +24,23 @@ class JobRepository(DBRepositoryImpl[Job]):
     def order_by(self) -> OrderByType:
         return [desc(col(Job.created_at))]
 
-    async def find_by_session(self, agent: str, device: str, session_id: str) -> Job | None:
+    async def find_by_session(self, agent: str, device: str, session_id: str, *, lock: bool = False) -> Job | None:
         query = select(Job).where(
             col(Job.agent) == agent,
             col(Job.device) == device,
             col(Job.session_id) == session_id,
         )
+        if lock:
+            query = query.with_for_update()
         return (await self.session.exec(query)).first()
 
-    async def claim_next(self, worker: str) -> Job | None:
+    async def claim_next(self, worker: str, idle: timedelta) -> Job | None:
+        now = datetime.now(UTC)
         pending = await self.list(
             query_filter=and_(
                 col(Job.status) == JobStatus.PENDING,
-                or_(col(Job.next_attempt_at).is_(None), col(Job.next_attempt_at) <= datetime.now(UTC)),
+                col(Job.last_activity_at) <= now - idle,
+                or_(col(Job.next_attempt_at).is_(None), col(Job.next_attempt_at) <= now),
             ),
             order_by=[col(Job.created_at)],
             limit=1,
@@ -90,7 +94,7 @@ class JobRepository(DBRepositoryImpl[Job]):
         return await self.bulk_update(
             and_(
                 col(Job.transcript).is_not(None),
-                col(Job.created_at) < datetime.now(UTC) - retention,
+                col(Job.last_activity_at) < datetime.now(UTC) - retention,
                 col(Job.status).in_([JobStatus.DONE, JobStatus.FAILED]),
             ),
             transcript=None,

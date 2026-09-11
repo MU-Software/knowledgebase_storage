@@ -22,6 +22,7 @@ const Jobs = () => {
           <TableCell>Device</TableCell>
           <TableCell>Summarizer</TableCell>
           <TableCell>Created</TableCell>
+          <TableCell>Last activity</TableCell>
         </TableRow>
       </TableHead>
       <TableBody>
@@ -35,6 +36,7 @@ const Jobs = () => {
             <TableCell>{job.device}</TableCell>
             <TableCell>{job.summarizer ?? '—'}</TableCell>
             <TableCell>{new Date(job.created_at).toLocaleString()}</TableCell>
+            <TableCell>{new Date(job.last_activity_at).toLocaleString()}</TableCell>
           </TableRow>
         ))}
       </TableBody>

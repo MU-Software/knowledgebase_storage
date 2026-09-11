@@ -13,6 +13,7 @@ const RUNTIME_FIELDS: Field<keyof RuntimeSetting>[] = [
   { key: 'document_language', label: 'Note language', type: 'text' },
   { key: 'job_max_attempts', label: 'Max attempts', type: 'number' },
   { key: 'job_batch_size', label: 'Batch size', type: 'number' },
+  { key: 'job_idle_seconds', label: 'Summarize after idle (s)', type: 'number' },
   { key: 'transcript_retention_hours', label: 'Transcript retention (h)', type: 'number' },
   { key: 'stale_claim_hours', label: 'Stale claim (h)', type: 'number' },
   { key: 'maintenance_interval_seconds', label: 'Janitor interval (s)', type: 'number' },
@@ -174,7 +175,7 @@ const Settings = () => {
         LLM providers
       </Typography>
       <Typography variant="body2" sx={{ mb: 2 }}>
-        Tried in priority order. A provider is skipped until the job is older than its minimum age. “Save & test” summarizes a throwaway transcript
+        Tried in priority order. A provider is skipped until the session has been quiet for its minimum age. “Save & test” summarizes a throwaway transcript
         with the saved provider, so a self-hosted base URL has to be reachable from the API server.
       </Typography>
       {data.map((provider) => (

@@ -43,7 +43,7 @@ class ConfigCache:
 
 
 def partition(config: WorkerConfig, job: dict[str, Any]) -> tuple[list[LLMProviderResolved], int | None]:
-    age = (datetime.now(UTC) - datetime.fromisoformat(job["created_at"])).total_seconds()
+    age = (datetime.now(UTC) - datetime.fromisoformat(job["last_activity_at"])).total_seconds()
     ready = [provider for provider in config.providers if age >= provider.min_job_age_seconds]
     waits = [int(provider.min_job_age_seconds - age) for provider in config.providers if age < provider.min_job_age_seconds]
     return ready, min(waits) if waits else None
