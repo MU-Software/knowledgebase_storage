@@ -12,7 +12,7 @@ services:
     logging: *default-logging
     mem_limit: 512m
     ports:
-      - "100.116.234.96:8006:8006"
+      - "${KBSTORE_BIND_ADDRESS:?Set KBSTORE_BIND_ADDRESS}:8006:8006"
     environment:
       TZ: Asia/Seoul
       DATABASE__DSN: ${KBSTORE_POSTGRES_DSN:?Set KBSTORE_POSTGRES_DSN}

@@ -5,6 +5,7 @@ from typing import TYPE_CHECKING, Annotated
 from uuid import uuid4
 
 from fastapi import Depends
+from sqlalchemy.orm import defer
 from sqlmodel import col, desc, select
 from sqlmodel.sql.expression import and_, or_
 
@@ -33,6 +34,20 @@ class JobRepository(DBRepositoryImpl[Job]):
         if lock:
             query = query.with_for_update()
         return (await self.session.exec(query)).first()
+
+    async def list_unsummarized(self, project: str, exclude_session_id: str | None, limit: int) -> Sequence[Job]:
+        query = (
+            select(Job)
+            .options(defer(Job.transcript))  # type: ignore[arg-type]
+            .where(
+                col(Job.project) == project,
+                col(Job.status).in_([JobStatus.PENDING, JobStatus.CLAIMED]),
+                col(Job.session_id) != (exclude_session_id or ""),
+            )
+            .order_by(desc(col(Job.last_activity_at)))
+            .limit(limit)
+        )
+        return (await self.session.exec(query)).all()
 
     async def claim_next(self, worker: str, idle: timedelta) -> Job | None:
         now = datetime.now(UTC)

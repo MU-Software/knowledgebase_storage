@@ -266,7 +266,7 @@ def map_projects(source: Source) -> dict[str, str]:
 
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--api-base", default="http://workbench-nrt:8006")
+    parser.add_argument("--api-base", default="http://127.0.0.1:8006")
     parser.add_argument("--device", required=True, help="name of the machine the history came from")
     parser.add_argument("--claude", type=Path, help="~/.claude directory or an archive of it")
     parser.add_argument("--codex", type=Path, help="~/.codex directory or an archive of it")

@@ -28,10 +28,16 @@ logger = logging.getLogger(__name__)
 BACKOFF_BASE_SECONDS = 60
 BACKOFF_CAP_SECONDS = 3600
 SETTLED_STATUSES = {JobStatus.DONE, JobStatus.FAILED}
+LAST_REQUEST_CHARS = 1000
 
 
 def transcript_digest(transcript: list[dict[str, Any]] | None) -> str:
     return sha256(json.dumps(transcript, ensure_ascii=False, sort_keys=True).encode()).hexdigest()
+
+
+def last_request_of(transcript: list[dict[str, Any]] | None) -> str | None:
+    request = next((str(m.get("content", "")) for m in reversed(transcript or []) if m.get("role") == "user"), None)
+    return None if request is None else request[:LAST_REQUEST_CHARS]
 
 
 class JobService(ServiceImpl[JobRepository]):
@@ -43,13 +49,20 @@ class JobService(ServiceImpl[JobRepository]):
         now, digest = datetime.now(UTC), transcript_digest(payload.transcript)
         existing = await self.repository.find_by_session(payload.agent, payload.device, payload.session_id, lock=True)
         if existing is None:
-            job = Job(**payload.model_dump(), created_at=now, last_activity_at=now, transcript_digest=digest)
+            job = Job(
+                **payload.model_dump(),
+                created_at=now,
+                last_activity_at=now,
+                transcript_digest=digest,
+                last_request=last_request_of(payload.transcript),
+            )
             return await self.repository.save(job), True
         if existing.transcript_digest == digest:
             return existing, False
 
         existing.sqlmodel_update(payload.model_dump(exclude_none=True))
         existing.transcript_digest = digest
+        existing.last_request = last_request_of(payload.transcript)
         existing.last_activity_at = now
         if existing.status in SETTLED_STATUSES:
             existing.status = JobStatus.PENDING

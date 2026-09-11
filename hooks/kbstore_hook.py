@@ -18,7 +18,7 @@ from typing import TYPE_CHECKING
 if TYPE_CHECKING:
     from collections.abc import Iterator
 
-API_BASE = os.environ.get("KBSTORE_API_BASE", "http://workbench-nrt:8006")
+API_BASE = os.environ.get("KBSTORE_API_BASE", "http://127.0.0.1:8006")
 PULL_BASE = os.environ.get("KBSTORE_PULL_BASE") or API_BASE
 PULL_AUTH = os.environ.get("KBSTORE_PULL_AUTH")
 TIMEOUT_SECONDS = float(os.environ.get("KBSTORE_TIMEOUT", "3"))
@@ -28,6 +28,7 @@ STATE_DIR = Path(os.environ.get("KBSTORE_STATE_DIR") or Path.home() / ".cache" /
 NON_PROJECT_DIRS = {Path.home(), Path("/tmp"), Path("/var/tmp"), Path("/")}  # noqa: S108
 TEXT_BLOCK_TYPES = {"text", "input_text", "output_text"}
 ROLES = {"user", "assistant"}
+HOOK_ERRORS = (OSError, ValueError, KeyError, TypeError)
 
 
 def _git(cwd: Path, *args: str) -> str | None:
@@ -100,7 +101,8 @@ def read_transcript(path: Path) -> tuple[str, str | None, list[dict]]:
     try:
         for entry in read_lines(path):
             if entry.get("type") == "session_meta" and thread_id is None:
-                meta = entry.get("payload") if isinstance(entry.get("payload"), dict) else {}
+                payload = entry.get("payload")
+                meta = payload if isinstance(payload, dict) else {}
                 agent, thread_id = "codex", meta.get("id")
                 if is_subagent(meta):
                     return agent, thread_id, []
@@ -195,6 +197,17 @@ def pull_memories(memory_dir: Path, project: str) -> None:
     save_synced(memory_dir, project, synced)
 
 
+def start_session(payload: dict, cwd: Path, memory_dir: Path | None) -> str:
+    project = infer_project(cwd)[0]
+    if memory_dir is not None:
+        with contextlib.suppress(*HOOK_ERRORS):
+            pull_memories(memory_dir, project)
+
+    query = urllib.parse.urlencode({"project": project, "session_id": payload.get("session_id") or "", "memories": str(memory_dir is None).lower()})
+    result = call("GET", f"{PULL_BASE}/api/wiki/context?{query}", auth=PULL_AUTH)
+    return str(result.get("context") or "") if isinstance(result, dict) else ""
+
+
 def capture(payload: dict, transcript: Path, cwd: Path) -> dict[str, str] | None:
     agent, thread_id, messages = read_transcript(transcript)
     project, inference = infer_project(cwd)
@@ -222,18 +235,16 @@ def main() -> int:
     except (json.JSONDecodeError, ValueError):
         payload = {}
 
-    if not (transcript_path := payload.get("transcript_path")):
-        return 0
-
-    transcript = Path(transcript_path)
+    transcript = Path(payload["transcript_path"]) if payload.get("transcript_path") else None
     cwd = Path(payload.get("cwd") or Path.cwd())
-    memory_dir = memory_dir_of(transcript)
-    with contextlib.suppress(OSError, ValueError, KeyError, TypeError):
-        if payload.get("hook_event_name") != "SessionStart":
-            if (fields := capture(payload, transcript, cwd)) is not None and memory_dir is not None:
-                push_memories(memory_dir, fields)
-        elif memory_dir is not None:
-            pull_memories(memory_dir, infer_project(cwd)[0])
+    memory_dir = memory_dir_of(transcript) if transcript is not None else None
+    with contextlib.suppress(*HOOK_ERRORS):
+        if payload.get("hook_event_name") == "SessionStart":
+            if context := start_session(payload, cwd, memory_dir):
+                output = {"hookSpecificOutput": {"hookEventName": "SessionStart", "additionalContext": context}}
+                sys.stdout.write(json.dumps(output, ensure_ascii=False))
+        elif transcript is not None and (fields := capture(payload, transcript, cwd)) is not None and memory_dir is not None:
+            push_memories(memory_dir, fields)
     return 0
 
 

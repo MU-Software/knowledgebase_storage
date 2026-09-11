@@ -81,6 +81,7 @@ class Job(UUIDMixin, TimestampMixin, JobBase, table=True):
     status: JobStatus = Field(default=JobStatus.PENDING, sa_type=enum_type(JobStatus))
     last_activity_at: datetime = Field(sa_type=DateTime(timezone=True), sa_column_kwargs={"server_default": text("now()")})
     transcript_digest: str | None = None
+    last_request: str | None = None
 
     claimed_at: datetime | None = Field(default=None, sa_type=DateTime(timezone=True))
     claimed_by: str | None = None

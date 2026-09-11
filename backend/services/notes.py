@@ -4,13 +4,13 @@ import logging
 import re
 from collections import Counter
 from datetime import UTC, datetime
-from typing import TYPE_CHECKING, Annotated
+from typing import TYPE_CHECKING, Annotated, get_args
 
 import frontmatter
 from fastapi import Depends
 
 from backend.repositories.note import NoteRepository, noteRepositoryDI
-from backend.schemas import MemoryFile, MemorySyncResult, ProjectSummary
+from backend.schemas import MemoryFile, MemorySyncResult, Observation, ObservationCategory, ProjectSummary
 from backend.services import ServiceImpl
 
 if TYPE_CHECKING:
@@ -21,7 +21,10 @@ logger = logging.getLogger(__name__)
 
 SEARCH_RESULT_LIMIT = 50
 MEMORY_NOTE_KEYS = frozenset({"title", "type", "tags", "source", "permalink"})
+OBSERVATIONS_HEADING = "## Observations"
+RELATIONS_HEADING = "## Relations"
 _UNSAFE = re.compile(r"[^\w.-]+", re.UNICODE)
+_OBSERVATION = re.compile(rf"^- \[(?P<category>{'|'.join(get_args(ObservationCategory))})\] (?P<text>.*?)(?P<tags>(?: #[^\s#]+)*)$")
 
 
 def slugify(value: str) -> str:
@@ -52,16 +55,31 @@ class NoteService(ServiceImpl[NoteRepository]):
 
         lines = [f"# {result.title}", "", result.summary, ""]
         if result.observations:
-            lines += ["## Observations", ""]
+            lines += [OBSERVATIONS_HEADING, ""]
             lines += [f"- [{o.category}] {o.text}" + "".join(f" #{t}" for t in o.tags) for o in result.observations]
             lines.append("")
         if result.relations:
-            lines += ["## Relations", ""]
+            lines += [RELATIONS_HEADING, ""]
             lines += [f"- {r.type} [[{r.target}]]" for r in result.relations]
             lines.append("")
 
         post.content = "\n".join(lines).rstrip() + "\n"
         return frontmatter.dumps(post)
+
+    @staticmethod
+    def parse_log(content: str) -> tuple[str, list[Observation]]:
+        summary: list[str] = []
+        observations: list[Observation] = []
+        section: str | None = None
+        for line in content.splitlines():
+            if line.startswith(("# ", "## ")):
+                section = line
+            elif section is not None and not section.startswith("## "):
+                summary.append(line)
+            elif section == OBSERVATIONS_HEADING and (match := _OBSERVATION.match(line)):
+                tags = [tag.removeprefix("#") for tag in match["tags"].split()]
+                observations.append(Observation.model_validate({"category": match["category"], "text": match["text"], "tags": tags}))
+        return "\n".join(summary).strip(), observations
 
     @staticmethod
     def render_memory(payload: MemorySync, file: MemoryFile) -> str:
@@ -96,6 +114,14 @@ class NoteService(ServiceImpl[NoteRepository]):
         post.metadata = metadata
         return frontmatter.dumps(post).rstrip() + "\n"
 
+    @staticmethod
+    def description_of(text: str) -> str:
+        try:
+            return str(frontmatter.loads(text).metadata.get("description") or "")
+        except Exception:
+            logger.warning("skipping the description of a memory note with unreadable frontmatter", exc_info=True)
+            return ""
+
     def write(self, job: Job, result: SummaryResult, summarizer: str) -> str:
         day = (job.ended_at or job.created_at).strftime("%Y-%m-%d")
         relative = job.note_path or f"projects/{slugify(job.project)}/log/{day}-{slugify(job.agent)}-{job.id}.md"
@@ -108,11 +134,20 @@ class NoteService(ServiceImpl[NoteRepository]):
         texts = self.repository.read_directory(f"projects/{slugify(project)}/memory")
         return [MemoryFile(name=name, content=self.restore_memory(text)) for name, text in texts.items()]
 
+    def memory_descriptions(self, project: str) -> list[tuple[str, str]]:
+        texts = self.repository.read_directory(f"projects/{slugify(project)}/memory")
+        return [(name, self.description_of(text)) for name, text in texts.items() if name != "MEMORY.md"]
+
     def sync_memories(self, payload: MemorySync) -> MemorySyncResult:
         base = f"projects/{slugify(payload.project)}/memory"
         written = [self.repository.write(f"{base}/{file.name}", self.render_memory(payload, file)) for file in payload.files]
         deleted = [path for path in (f"{base}/{name}" for name in payload.deleted) if self.repository.delete(path)]
         return MemorySyncResult(written=written, deleted=deleted)
+
+    def recent_logs(self, project: str, limit: int) -> list[NoteDetail]:
+        logs = [summary for summary in self.repository.list_summaries(slugify(project)) if "/log/" in summary.path]
+        logs.sort(key=lambda summary: str(summary.source.get("ingested_at", "")), reverse=True)
+        return [self.repository.retrieve(summary.path) for summary in logs[:limit]]
 
     def list_projects(self) -> list[ProjectSummary]:
         summaries = self.repository.list_summaries()

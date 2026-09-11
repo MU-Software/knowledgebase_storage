@@ -24,14 +24,16 @@ It reads both Claude Code and Codex transcripts.
 }
 ```
 
-`Stop` sends the conversation and uploads changed memory files. `SessionStart` downloads the project's memory.
+`Stop` sends the conversation and uploads changed memory files.
+`SessionStart` downloads the project's memory and adds the project's recent kb records to the context.
 
-A machine outside the tailnet registers only `SessionStart`, with `KBSTORE_PULL_BASE=https://mcp.mudev.cc/kb`
-and `KBSTORE_PULL_AUTH` set to the `Authorization` header of its mudev MCP config.
+A machine that cannot reach the API registers only `SessionStart`, with `KBSTORE_PULL_BASE` pointing at an
+authenticated reverse proxy for `/api/wiki/memories` and `/api/wiki/context`, and `KBSTORE_PULL_AUTH` set to its
+`Authorization` header.
 
 ## Codex
 
-`~/.codex/hooks.json` needs only the `Stop` entry. Trust it with `/hooks` after every change, or Codex skips it.
+`~/.codex/hooks.json` takes the same entries. Trust them with `/hooks` after every change, or Codex skips them.
 
 The server keeps the latest snapshot of a session and summarizes it after `job_idle_seconds` of inactivity.
 
@@ -39,8 +41,8 @@ The server keeps the latest snapshot of a session and summarizes it after `job_i
 
 | Variable | Default | Meaning |
 |---|---|---|
-| `KBSTORE_API_BASE` | `http://workbench-nrt:8006` | Tailnet address |
-| `KBSTORE_PULL_BASE` | `KBSTORE_API_BASE` | Where `SessionStart` downloads memory from |
+| `KBSTORE_API_BASE` | `http://127.0.0.1:8006` | The kbstore API |
+| `KBSTORE_PULL_BASE` | `KBSTORE_API_BASE` | Where `SessionStart` reads memory and context from |
 | `KBSTORE_PULL_AUTH` | | `Authorization` header for `KBSTORE_PULL_BASE` only |
 | `KBSTORE_AGENT` | detected from the transcript | |
 | `KBSTORE_DEVICE` | hostname | |

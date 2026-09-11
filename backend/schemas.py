@@ -177,3 +177,7 @@ class MemorySync(BaseModel):
 class MemorySyncResult(BaseModel):
     written: list[str]
     deleted: list[str]
+
+
+class ProjectContext(BaseModel):
+    context: str

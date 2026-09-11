@@ -4,7 +4,8 @@ from typing import Annotated
 
 from fastapi import APIRouter, Query, status
 
-from backend.schemas import MemoryFile, MemorySync, MemorySyncResult, NoteDetail, NoteSummary, NoteWrite, ProjectSummary
+from backend.schemas import MemoryFile, MemorySync, MemorySyncResult, NoteDetail, NoteSummary, NoteWrite, ProjectContext, ProjectSummary
+from backend.services.context import contextServiceDI
 from backend.services.notes import noteServiceDI
 
 router = APIRouter(prefix="/wiki", tags=["wiki"])
@@ -38,6 +39,17 @@ def memories(service: noteServiceDI, project: Annotated[str, Query(min_length=1)
 @router.put("/memories")
 def sync_memories(payload: MemorySync, service: noteServiceDI) -> MemorySyncResult:
     return service.sync_memories(payload)
+
+
+@router.get("/context")
+async def context(
+    service: contextServiceDI,
+    project: Annotated[str, Query(min_length=1)],
+    *,
+    session_id: Annotated[str | None, Query(description="the session asking, left out of the unsummarized list")] = None,
+    memories: Annotated[bool, Query(description="include the memory list, for agents that do not load it themselves")] = False,
+) -> ProjectContext:
+    return ProjectContext(context=await service.build(project, session_id, memories=memories))
 
 
 @router.get("/search")

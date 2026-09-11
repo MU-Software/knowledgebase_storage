@@ -34,9 +34,12 @@ class NoteRepository(FSRepositoryImpl):
             raise ResourceNotFoundError(self.resource)
         return NoteDetail.from_markdown_file(target, self.root)
 
-    def write(self, relative_path: str, content: str) -> str:
+    def _validate_path(self, relative_path: str) -> None:
         if self.contain(relative_path) is None or not relative_path.endswith(self.suffix):
             raise InvalidNotePathError(relative_path)
+
+    def write(self, relative_path: str, content: str) -> str:
+        self._validate_path(relative_path)
         return super().write(relative_path, content)
 
     def read_directory(self, relative_path: str) -> dict[str, str]:
@@ -46,6 +49,7 @@ class NoteRepository(FSRepositoryImpl):
         return {path.name: path.read_text(encoding="utf-8") for path in sorted(base.glob(f"*{self.suffix}"))}
 
     def delete(self, relative_path: str) -> bool:
+        self._validate_path(relative_path)
         if (target := self.resolve(relative_path)) is None:
             return False
         target.unlink()

@@ -20,6 +20,13 @@ used unmodified. This repository adds only what it lacks: ingest, summarization,
 provenance tagging and the wiki. The two sides meet at one markdown directory,
 so basic-memory is never imported and its AGPL does not propagate here.
 
+Claude Code and Codex talk to the API through [`hooks/kbstore_hook.py`](hooks/kbstore_hook.py):
+
+- `Stop` posts the conversation to `/api/jobs` and uploads changed Claude memory files to
+  `/api/wiki/memories`, which keeps them verbatim instead of summarizing them.
+- `SessionStart` downloads the project's memory and adds `/api/wiki/context` to the session:
+  recent summaries, the last requests of sessions not summarized yet, and the memory list for Codex.
+
 Three rules shape the design:
 
 - **The hook never summarizes.** It holds the session, so it enqueues and returns.
