@@ -3,7 +3,6 @@ from __future__ import annotations
 from abc import ABC, abstractmethod
 from typing import Any
 
-from backend.errors import ContextTooSmallError, ReduceNotConvergingError
 from backend.models import MIN_BUDGET_TOKENS, MIN_CONTEXT_TOKENS, PROMPT_OVERHEAD_TOKENS
 from backend.schemas import SummaryResult
 from backend.summarizers import prompt
@@ -23,7 +22,8 @@ class Summarizer(ABC):
         context = prompt.job_context(agent=agent, project=project, device=device)
         budget = self.context_tokens - PROMPT_OVERHEAD_TOKENS
         if budget < MIN_BUDGET_TOKENS:
-            raise ContextTooSmallError(self.context_tokens, MIN_CONTEXT_TOKENS)
+            msg = f"context_tokens {self.context_tokens} leaves no room for the prompt; needs at least {MIN_CONTEXT_TOKENS}"
+            raise ValueError(msg)
         chunks = prompt.chunk_transcript(messages, budget)
 
         instruction = prompt.SINGLE_INSTRUCTION
@@ -40,7 +40,8 @@ class Summarizer(ABC):
             chunks = prompt.split_text(body, budget)
         else:
             if len(chunks) > 1:
-                raise ReduceNotConvergingError(len(chunks))
+                msg = f"summary did not fit the context budget after repeated reduction ({len(chunks)} chunks left)"
+                raise RuntimeError(msg)
 
         body = chunks[0] if chunks else body
         user = prompt.build_user_prompt(instruction, body, context)

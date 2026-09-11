@@ -1,8 +1,8 @@
 from __future__ import annotations
 
-from datetime import datetime  # noqa: TC003
+from datetime import datetime
 from typing import TYPE_CHECKING, Annotated, Any, Literal, Self
-from uuid import UUID  # noqa: TC003
+from uuid import UUID
 
 import frontmatter
 from pydantic import BaseModel, Field
@@ -110,6 +110,7 @@ class RuntimeSettingUpdate(BaseModel):
     stale_claim_hours: int | None = Field(default=None, ge=1)
     maintenance_interval_seconds: int | None = Field(default=None, ge=5)
     worker_poll_interval_seconds: int | None = Field(default=None, ge=1)
+    session_ttl_hours: int | None = Field(default=None, ge=1)
 
 
 class RuntimeSettingPublic(RuntimeSettingBase):
@@ -181,3 +182,37 @@ class MemorySyncResult(BaseModel):
 
 class ProjectContext(BaseModel):
     context: str
+
+
+class LoginRequest(BaseModel):
+    username: str = Field(min_length=1)
+    password: str = Field(min_length=1)
+
+
+class AccessTokenResponse(BaseModel):
+    access_token: str
+    token_type: Literal["bearer"] = "bearer"  # noqa: S105
+
+
+class UserPublic(BaseModel):
+    id: UUID
+    username: str
+    last_login_at: datetime | None
+
+
+class APIKeyCreate(BaseModel):
+    name: str = Field(min_length=1, max_length=100)
+    expires_in_days: int | None = Field(default=None, ge=1)
+
+
+class APIKeyPublic(BaseModel):
+    id: UUID
+    name: str
+    prefix: str
+    created_at: datetime
+    deleted_at: datetime | None
+    last_used_at: datetime | None
+
+
+class APIKeyCreated(APIKeyPublic):
+    key: str

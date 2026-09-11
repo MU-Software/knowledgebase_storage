@@ -2,9 +2,12 @@ import { AppBar, Box, Button, Container, Toolbar, Typography } from '@mui/materi
 import { Link, Outlet, useLocation } from 'react-router-dom'
 
 import QueryBoundary from './components/QueryBoundary'
+import { useLogout, useMe } from './hooks'
 
 const Layout = () => {
   const { pathname } = useLocation()
+  const { data: me } = useMe()
+  const logout = useLogout()
 
   return (
     <Box>
@@ -24,6 +27,15 @@ const Layout = () => {
           </Button>
           <Button color="inherit" component={Link} to="/settings">
             Settings
+          </Button>
+          <Button color="inherit" component={Link} to="/api-keys">
+            API keys
+          </Button>
+          <Typography variant="body2" sx={{ ml: 2, mr: 1, opacity: 0.8 }}>
+            {me?.username}
+          </Typography>
+          <Button color="inherit" onClick={() => logout.mutate()} disabled={logout.isPending}>
+            Sign out
           </Button>
         </Toolbar>
       </AppBar>

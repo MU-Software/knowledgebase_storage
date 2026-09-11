@@ -5,7 +5,7 @@ from typing import TYPE_CHECKING, Annotated
 
 from fastapi import Depends
 
-from backend.errors import InvalidNotePathError, ResourceNotFoundError
+from backend.errors import ClientError
 from backend.repositories import FSRepositoryImpl
 from backend.schemas import NoteDetail, NoteSummary
 
@@ -31,12 +31,12 @@ class NoteRepository(FSRepositoryImpl):
 
     def retrieve(self, relative_path: str) -> NoteDetail:
         if (target := self.resolve(relative_path)) is None:
-            raise ResourceNotFoundError(self.resource)
+            ClientError.RESOURCE_NOT_FOUND.format_msg(resource=self.resource).raise_()
         return NoteDetail.from_markdown_file(target, self.root)
 
     def _validate_path(self, relative_path: str) -> None:
         if self.contain(relative_path) is None or not relative_path.endswith(self.suffix):
-            raise InvalidNotePathError(relative_path)
+            ClientError.INVALID_NOTE_PATH.format_msg(path=relative_path).raise_()
 
     def write(self, relative_path: str, content: str) -> str:
         self._validate_path(relative_path)

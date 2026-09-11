@@ -10,7 +10,7 @@ from fastapi import Depends
 from sqlalchemy import true
 from sqlmodel import col
 
-from backend.errors import StaleClaimError
+from backend.errors import ClientError
 from backend.models import Job, JobBase, JobStatus
 from backend.repositories.job import JobRepository, jobRepositoryDI
 from backend.repositories.setting import runtimeSettingRepositoryDI
@@ -85,7 +85,7 @@ class JobService(ServiceImpl[JobRepository]):
 
     def verify_claim(self, job: Job, token: UUID) -> None:
         if job.status is not JobStatus.CLAIMED or job.claim_token != token:
-            raise StaleClaimError(job.id)
+            ClientError.STALE_CLAIM.format_msg(job_id=job.id).raise_()
 
     async def release(self, job: Job, retry_after_seconds: int = 0) -> Job:
         job.status = JobStatus.PENDING

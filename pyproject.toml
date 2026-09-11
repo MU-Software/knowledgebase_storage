@@ -18,6 +18,8 @@ dependencies = [
     "sqlmodel>=0.0.42",
     "typer>=0.27.2",
     "uvicorn[standard]>=0.52.4",
+    "argon2-cffi>=25.1.0",
+    "pyjwt>=2.12.1",
 ]
 
 [dependency-groups]
@@ -88,3 +90,4 @@ classmethod-decorators = ["classmethod", "pydantic.field_validator"]
 "backend/models.py" = ["ANN401"]
 "tools/*" = ["S310", "SIM115", "T201", "TC003"]
 "backend/routes/*" = ["TC001", "TC002", "TC003"]
+"backend/dependencies/*" = ["TC001", "TC002", "TC003"]

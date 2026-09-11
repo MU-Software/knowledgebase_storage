@@ -1,19 +1,29 @@
 from __future__ import annotations
 
-from datetime import datetime
+from datetime import UTC, datetime
 from enum import StrEnum
-from typing import Any
+from typing import TYPE_CHECKING, Any
 from uuid import UUID, uuid4
 
+from argon2 import PasswordHasher
+from pydantic import field_validator
 from sqlalchemy import DateTime, Enum, Index, UniqueConstraint, text
 from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.sql.functions import now
-from sqlmodel import Field, SQLModel
+from sqlmodel import Field, SQLModel, col, or_
+from sqlmodel.main import SQLModelConfig
+
+from backend.utils.pydanticlib import PasswordField, UsernameField
+
+if TYPE_CHECKING:
+    from sqlalchemy.sql.elements import ColumnElement
 
 SINGLETON_ID = 1
 PROMPT_OVERHEAD_TOKENS = 4096
 MIN_BUDGET_TOKENS = 2048
 MIN_CONTEXT_TOKENS = PROMPT_OVERHEAD_TOKENS + MIN_BUDGET_TOKENS
+API_KEY_PREFIX = "kbs_"
+PASSWORD_HASHER = PasswordHasher()
 
 
 class JobStatus(StrEnum):
@@ -54,6 +64,18 @@ class TimestampMixin(SQLModel):
         sa_type=DateTime(timezone=True),
         sa_column_kwargs={"server_default": text("now()"), "onupdate": now()},
     )
+
+
+class SoftDeleteMixin(SQLModel):
+    deleted_at: datetime | None = Field(default=None, sa_type=DateTime(timezone=True))
+
+    @classmethod
+    def not_deleted(cls) -> ColumnElement[bool]:
+        return or_(col(cls.deleted_at).is_(None), col(cls.deleted_at) > now())
+
+    @property
+    def is_deleted(self) -> bool:
+        return self.deleted_at is not None and self.deleted_at <= datetime.now(UTC)
 
 
 class JobBase(SQLModel):
@@ -104,6 +126,7 @@ class RuntimeSettingBase(SQLModel):
     stale_claim_hours: int = Field(default=1, ge=1)
     maintenance_interval_seconds: int = Field(default=60, ge=5)
     worker_poll_interval_seconds: int = Field(default=15, ge=1)
+    session_ttl_hours: int = Field(default=168, ge=1)
 
 
 class RuntimeSetting(TimestampMixin, RuntimeSettingBase, table=True):
@@ -129,3 +152,32 @@ class LLMProvider(UUIDMixin, TimestampMixin, LLMProviderBase, table=True):
     __tablename__ = "llm_provider"
 
     api_key: str = ""
+
+
+class User(UUIDMixin, TimestampMixin, SoftDeleteMixin, table=True):
+    __tablename__ = "user"
+    __table_args__ = (Index("uq_user_username", "username", unique=True, postgresql_where=text("deleted_at IS NULL")),)
+    model_config = SQLModelConfig(validate_assignment=True)
+
+    username: UsernameField
+    password: PasswordField = Field(exclude=True)
+    password_updated_at: datetime = Field(sa_type=DateTime(timezone=True), sa_column_kwargs={"server_default": text("now()")})
+    last_login_at: datetime | None = Field(default=None, sa_type=DateTime(timezone=True))
+
+    @field_validator("password", mode="after")
+    @classmethod
+    def hash_password(cls, password: str) -> str:
+        return PASSWORD_HASHER.hash(password)
+
+    def compare_password(self, password: str) -> bool:
+        return PASSWORD_HASHER.verify(self.password, password)
+
+
+class APIKey(UUIDMixin, TimestampMixin, SoftDeleteMixin, table=True):
+    __tablename__ = "api_key"
+
+    user_id: UUID = Field(foreign_key="user.id", ondelete="RESTRICT", index=True)
+    name: str
+    prefix: str
+    key_digest: str = Field(unique=True, index=True)
+    last_used_at: datetime | None = Field(default=None, sa_type=DateTime(timezone=True))

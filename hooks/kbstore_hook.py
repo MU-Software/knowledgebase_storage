@@ -21,6 +21,7 @@ if TYPE_CHECKING:
 API_BASE = os.environ.get("KBSTORE_API_BASE", "http://127.0.0.1:8006")
 PULL_BASE = os.environ.get("KBSTORE_PULL_BASE") or API_BASE
 PULL_AUTH = os.environ.get("KBSTORE_PULL_AUTH")
+API_KEY = os.environ.get("KBSTORE_API_KEY")
 TIMEOUT_SECONDS = float(os.environ.get("KBSTORE_TIMEOUT", "3"))
 MAX_MESSAGES = int(os.environ.get("KBSTORE_MAX_MESSAGES", "2000"))
 STATE_DIR = Path(os.environ.get("KBSTORE_STATE_DIR") or Path.home() / ".cache" / "kbstore")
@@ -118,7 +119,7 @@ def call(method: str, url: str, payload: dict | None = None, auth: str | None = 
     request = urllib.request.Request(  # noqa: S310
         url,
         data=None if payload is None else json.dumps(payload, ensure_ascii=False).encode(),
-        headers={"Content-Type": "application/json", **({"Authorization": auth} if auth else {})},
+        headers={"Content-Type": "application/json", **({"X-API-Key": API_KEY} if API_KEY else {}), **({"Authorization": auth} if auth else {})},
         method=method,
     )
     try:

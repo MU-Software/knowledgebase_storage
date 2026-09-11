@@ -18,6 +18,7 @@ const RUNTIME_FIELDS: Field<keyof RuntimeSetting>[] = [
   { key: 'stale_claim_hours', label: 'Stale claim (h)', type: 'number' },
   { key: 'maintenance_interval_seconds', label: 'Janitor interval (s)', type: 'number' },
   { key: 'worker_poll_interval_seconds', label: 'Worker poll (s)', type: 'number' },
+  { key: 'session_ttl_hours', label: 'Login session (h)', type: 'number' },
 ]
 
 const PROVIDER_FIELDS: Field<keyof LLMProvider | 'api_key'>[] = [

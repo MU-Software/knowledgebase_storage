@@ -7,7 +7,7 @@ from sqlalchemy import true, update
 from sqlmodel import SQLModel, select
 
 from backend.dependencies import dbDI, notesDirDI
-from backend.errors import ResourceNotFoundError
+from backend.errors import ClientError
 
 if TYPE_CHECKING:
     from collections.abc import Iterator, Sequence
@@ -50,7 +50,7 @@ class DBRepositoryImpl(RepositoryImpl, Generic[M]):
     async def retrieve_by_id(self, obj_id: UUID, *, with_for_update: bool = False) -> M:
         instance = await self.session.get(self.model, obj_id, with_for_update=with_for_update or None)
         if instance is None:
-            raise ResourceNotFoundError(self.resource)
+            ClientError.RESOURCE_NOT_FOUND.format_msg(resource=self.resource).raise_()
         return instance
 
     async def list(self, **kwargs: Unpack[ListKwargsType]) -> Sequence[M]:

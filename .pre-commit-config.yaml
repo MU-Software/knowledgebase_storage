@@ -31,11 +31,13 @@ repos:
         additional_dependencies:
           - alembic
           - anthropic
+          - argon2-cffi
           - fastapi
           - httpx
           - psycopg
           - pydantic
           - pydantic-settings
+          - pyjwt
           - python-frontmatter
           - sqlmodel
           - typer

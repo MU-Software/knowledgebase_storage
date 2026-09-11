@@ -2,9 +2,10 @@ from __future__ import annotations
 
 from functools import cached_property, lru_cache
 from pathlib import Path
+from secrets import token_hex
 from typing import Literal, Self
 
-from pydantic import BaseModel, PostgresDsn, field_validator
+from pydantic import BaseModel, Field, PostgresDsn, SecretStr, field_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 from sqlalchemy.ext.asyncio.engine import AsyncEngine, create_async_engine
 from sqlalchemy.ext.asyncio.session import async_sessionmaker
@@ -34,8 +35,15 @@ class ProjectSetting(BaseSettings):
     port: int = 8006
     notes_dir: Path = Path("/srv/knowledgebase/notes")
     log_level: Literal["DEBUG", "INFO", "WARNING", "ERROR"] = "INFO"
+    https_enabled: bool = False
+    secret_key: SecretStr = Field(default_factory=lambda: SecretStr(token_hex(32)))
+    worker_api_key: SecretStr | None = None
 
     database: DatabaseSetting
+
+    @property
+    def cookie_samesite(self) -> Literal["lax", "strict", "none"]:
+        return ("none" if self.https_enabled else "lax") if self.debug else "strict"
 
     @field_validator("notes_dir")
     @classmethod

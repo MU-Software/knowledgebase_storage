@@ -10,6 +10,7 @@ from __future__ import annotations
 import argparse
 import functools
 import json
+import os
 import subprocess
 import sys
 import tarfile
@@ -181,8 +182,9 @@ def project_of(cwd: str | None) -> tuple[str, str]:
 
 
 class Client:
-    def __init__(self, base: str, *, dry_run: bool) -> None:
+    def __init__(self, base: str, api_key: str | None, *, dry_run: bool) -> None:
         self.base = base.rstrip("/")
+        self.api_key = api_key
         self.dry_run = dry_run
 
     def send(self, method: str, path: str, payload: dict) -> int:
@@ -191,7 +193,7 @@ class Client:
         request = urllib.request.Request(
             f"{self.base}{path}",
             data=json.dumps(payload, ensure_ascii=False).encode(),
-            headers={"Content-Type": "application/json"},
+            headers={"Content-Type": "application/json", **({"X-API-Key": self.api_key} if self.api_key else {})},
             method=method,
         )
         try:
@@ -267,6 +269,7 @@ def map_projects(source: Source) -> dict[str, str]:
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--api-base", default="http://127.0.0.1:8006")
+    parser.add_argument("--api-key", default=os.environ.get("KBSTORE_API_KEY"), help="sent as X-API-Key; defaults to $KBSTORE_API_KEY")
     parser.add_argument("--device", required=True, help="name of the machine the history came from")
     parser.add_argument("--claude", type=Path, help="~/.claude directory or an archive of it")
     parser.add_argument("--codex", type=Path, help="~/.codex directory or an archive of it")
@@ -277,7 +280,7 @@ def main() -> int:
     if not args.claude and not args.codex:
         parser.error("give --claude and/or --codex")
 
-    client = Client(args.api_base, dry_run=args.dry_run)
+    client = Client(args.api_base, args.api_key, dry_run=args.dry_run)
     mode = "DRY RUN" if args.dry_run else f"-> {args.api_base}"
     print(f"device={args.device}  {mode}")
 

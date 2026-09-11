@@ -6,6 +6,7 @@ DOCKER_COMPOSE_LOCAL_FILE := $(INFRA_LOCAL)docker-compose.dev.yaml
 
 DOTENV_DIR := $(PROJECT_DIR)dotenv/
 DOTENV_LOCAL := $(DOTENV_DIR).env.local
+-include $(DOTENV_LOCAL)
 
 COMPOSE ?= docker compose
 CONTAINER_ENGINE ?= docker
@@ -30,7 +31,7 @@ api:
 	uv run python -m backend
 
 worker:
-	uv run python -m backend.cli worker --api-url http://127.0.0.1:8006
+	uv run python -m backend.cli worker --api-url http://127.0.0.1:8006 --api-key $(WORKER_API_KEY)
 
 
 migrate:

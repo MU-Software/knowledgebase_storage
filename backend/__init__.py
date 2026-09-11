@@ -8,6 +8,7 @@ from typing import TYPE_CHECKING
 
 from fastapi import FastAPI
 
+from backend.error_handlers import get_error_handlers
 from backend.repositories.job import JobRepository
 from backend.repositories.setting import RuntimeSettingRepository
 from backend.routes import register_routes
@@ -59,6 +60,7 @@ def create_app() -> FastAPI:
         description="Collects, summarizes and publishes project knowledge from many devices and LLM services.",
         debug=settings.debug,
         lifespan=lifespan,
+        exception_handlers=get_error_handlers(),
     )
     register_routes(app)
     return app

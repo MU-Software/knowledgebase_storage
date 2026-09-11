@@ -17,6 +17,9 @@ services:
       TZ: Asia/Seoul
       DATABASE__DSN: ${KBSTORE_POSTGRES_DSN:?Set KBSTORE_POSTGRES_DSN}
       NOTES_DIR: /srv/knowledgebase/notes
+      HTTPS_ENABLED: ${KBSTORE_HTTPS_ENABLED:-false}
+      SECRET_KEY: ${KBSTORE_SECRET_KEY:?Set KBSTORE_SECRET_KEY}
+      WORKER_API_KEY: ${KBSTORE_WORKER_API_KEY:?Set KBSTORE_WORKER_API_KEY}
     volumes:
       - knowledgebase-notes:/srv/knowledgebase/notes
     healthcheck:
@@ -34,6 +37,7 @@ services:
     mem_limit: 512m
     environment:
       TZ: Asia/Seoul
+      KBSTORE_API_KEY: ${KBSTORE_WORKER_API_KEY:?Set KBSTORE_WORKER_API_KEY}
     depends_on:
       kbstore-api:
         condition: service_healthy

@@ -101,9 +101,9 @@ async def process(api: AsyncClient, job: dict[str, Any], config: WorkerConfig) -
     return False
 
 
-async def run(api_url: str, name: str) -> None:
+async def run(api_url: str, api_key: str, name: str) -> None:
     cache = ConfigCache()
-    async with AsyncClient(base_url=api_url, timeout=API_TIMEOUT_SECONDS) as api:
+    async with AsyncClient(base_url=api_url, headers={"X-API-Key": api_key}, timeout=API_TIMEOUT_SECONDS) as api:
         logger.info("worker %s started, polling %s", name, api_url)
         while True:
             config: WorkerConfig | None = None
@@ -126,8 +126,9 @@ async def run(api_url: str, name: str) -> None:
 
 def worker(
     api_url: str = typer.Option(..., envvar="KBSTORE_API_URL", help="Base URL of the knowledgebase API."),
+    api_key: str = typer.Option(..., envvar="KBSTORE_API_KEY", help="The api's WORKER_API_KEY."),
     name: str | None = typer.Option(None, help="Worker name recorded on claimed jobs. Defaults to the hostname."),
     log_level: str = typer.Option("INFO", help="Logging level."),
 ) -> None:
     logging.basicConfig(level=log_level)
-    asyncio.run(run(api_url, name or gethostname()))
+    asyncio.run(run(api_url, api_key, name or gethostname()))

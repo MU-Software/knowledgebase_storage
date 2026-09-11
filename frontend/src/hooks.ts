@@ -2,6 +2,45 @@ import { useMutation, useQueryClient, useSuspenseQuery } from '@tanstack/react-q
 
 import { api } from './api'
 
+export const useMe = () => useSuspenseQuery({ queryKey: ['me'], queryFn: api.me })
+
+export const useLogin = () => {
+  const client = useQueryClient()
+  return useMutation({
+    mutationFn: api.login,
+    onSuccess: (user) => {
+      client.removeQueries({ predicate: (query) => query.queryKey[0] !== 'me' })
+      client.setQueryData(['me'], user)
+    },
+  })
+}
+
+export const useLogout = () => {
+  const client = useQueryClient()
+  return useMutation({
+    mutationFn: api.logout,
+    onSuccess: () => client.setQueryData(['me'], null),
+  })
+}
+
+export const useAPIKeys = () => useSuspenseQuery({ queryKey: ['api-keys'], queryFn: api.apiKeys })
+
+export const useCreateAPIKey = () => {
+  const client = useQueryClient()
+  return useMutation({
+    mutationFn: api.createAPIKey,
+    onSuccess: () => client.invalidateQueries({ queryKey: ['api-keys'] }),
+  })
+}
+
+export const useDeleteAPIKey = () => {
+  const client = useQueryClient()
+  return useMutation({
+    mutationFn: api.deleteAPIKey,
+    onSuccess: () => client.invalidateQueries({ queryKey: ['api-keys'] }),
+  })
+}
+
 export const useProjects = () => useSuspenseQuery({ queryKey: ['projects'], queryFn: api.projects })
 
 export const useNotes = (project?: string) => useSuspenseQuery({ queryKey: ['notes', project], queryFn: () => api.notes(project) })

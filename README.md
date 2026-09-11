@@ -52,6 +52,12 @@ pre-commit install
 The frontend is inlined into a single `index.html` by `vite-plugin-singlefile`
 and served by FastAPI, so deployment carries no static-file paths.
 
+## Authentication
+
+- Wiki: JWT sign-in. Create a user with `uv run python -m backend.cli create-user <name>`.
+- Hooks and the importer: an API key from the wiki's API keys page, sent as `X-API-Key`.
+- Worker: `WORKER_API_KEY` of the api.
+
 ## Hooks
 
 See [`hooks/README.md`](hooks/README.md).
