@@ -11,3 +11,4 @@ backend/frontend/
 .ruff_cache/
 .mypy_cache/
 *.tsbuildinfo
+.claude
