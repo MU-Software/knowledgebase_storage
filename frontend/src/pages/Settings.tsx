@@ -31,6 +31,7 @@ const PROVIDER_FIELDS: Field<keyof LLMProvider | 'api_key'>[] = [
   { key: 'api_key', label: 'API key', type: 'password' },
   { key: 'priority', label: 'Priority', type: 'number' },
   { key: 'min_job_age_seconds', label: 'Min job age (s)', type: 'number' },
+  { key: 'max_concurrency', label: 'Max concurrency', type: 'number' },
   { key: 'context_tokens', label: 'Context tokens', type: 'number' },
   { key: 'connect_timeout_seconds', label: 'Connect timeout (s)', type: 'number', step: 'any' },
   { key: 'timeout_seconds', label: 'Request timeout (s)', type: 'number', step: 'any' },

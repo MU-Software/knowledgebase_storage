@@ -23,8 +23,12 @@ async def enqueue(payload: JobBase, service: jobServiceDI, response: Response) -
 
 
 @router.post("/claim", response_model=Job | None)
-async def claim(service: jobServiceDI, worker: Annotated[str, Query(description="worker name")]) -> Job | Response:
-    if (job := await service.claim_next(worker)) is None:
+async def claim(
+    service: jobServiceDI,
+    worker: Annotated[str, Query(description="worker name")],
+    min_age_seconds: Annotated[int, Query(ge=0, description="skip jobs whose last activity is more recent than this")] = 0,
+) -> Job | Response:
+    if (job := await service.claim_next(worker, min_age_seconds)) is None:
         return Response(status_code=status.HTTP_204_NO_CONTENT)
     return job
 

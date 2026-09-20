@@ -146,6 +146,7 @@ class LLMProviderBase(SQLModel):
     context_tokens: int = Field(default=32768, ge=MIN_CONTEXT_TOKENS)
     priority: int = Field(default=100, ge=0)
     min_job_age_seconds: int = Field(default=0, ge=0)
+    max_concurrency: int = Field(default=1, ge=1)
     connect_timeout_seconds: float = Field(default=5.0, gt=0)
     timeout_seconds: float = Field(default=600.0, gt=0)
     enabled: bool = True

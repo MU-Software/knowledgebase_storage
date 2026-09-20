@@ -126,8 +126,8 @@ class JobService(ServiceImpl[JobRepository]):
     def backoff(attempts: int) -> timedelta:
         return timedelta(seconds=min(BACKOFF_BASE_SECONDS * 2 ** (attempts - 1), BACKOFF_CAP_SECONDS))
 
-    async def claim_next(self, worker: str) -> Job | None:
-        idle = timedelta(seconds=(await self.runtime.get()).job_idle_seconds)
+    async def claim_next(self, worker: str, min_age_seconds: int = 0) -> Job | None:
+        idle = timedelta(seconds=max((await self.runtime.get()).job_idle_seconds, min_age_seconds))
         return await self.repository.claim_next(worker, idle)
 
 

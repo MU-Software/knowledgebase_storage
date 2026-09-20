@@ -31,8 +31,9 @@ Three rules shape the design:
 
 - **The hook never summarizes.** It holds the session, so it enqueues and returns.
 - **The worker pulls.** Jobs pile up while the LLM is unreachable and drain when it returns.
-- **One place calls the LLMs.** Providers live in the database, ordered by priority and gated
-  by job age; the worker walks that list. The API only owns the queue and its housekeeping.
+- **One place calls the LLMs.** Providers live in the database, gated by job age. Each one
+  claims its own jobs, so they run in parallel, and falls back to the others by priority when
+  it fails. The API only owns the queue and its housekeeping.
 - **Only bootstrap values live in the environment.** Everything else is a database row you
   edit in the wiki, which the worker fetches with an ETag and a 304.
 

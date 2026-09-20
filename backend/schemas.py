@@ -133,6 +133,7 @@ class LLMProviderUpdate(BaseModel):
     context_tokens: int | None = Field(default=None, ge=MIN_CONTEXT_TOKENS)
     priority: int | None = Field(default=None, ge=0)
     min_job_age_seconds: int | None = Field(default=None, ge=0)
+    max_concurrency: int | None = Field(default=None, ge=1)
     connect_timeout_seconds: float | None = Field(default=None, gt=0)
     timeout_seconds: float | None = Field(default=None, gt=0)
     enabled: bool | None = None

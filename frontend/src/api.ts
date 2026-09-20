@@ -193,6 +193,7 @@ export type LLMProvider = {
   context_tokens: number
   priority: number
   min_job_age_seconds: number
+  max_concurrency: number
   connect_timeout_seconds: number
   timeout_seconds: number
   enabled: boolean
