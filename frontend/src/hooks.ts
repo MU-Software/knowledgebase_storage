@@ -43,6 +43,41 @@ export const useDeleteAPIKey = () => {
 
 export const useProjects = () => useSuspenseQuery({ queryKey: ['projects'], queryFn: api.projects })
 
+const useProjectMutation = <TArgs, TResult>(mutationFn: (args: TArgs) => Promise<TResult>) => {
+  const client = useQueryClient()
+  return useMutation({
+    mutationFn,
+    onSuccess: () => {
+      client.invalidateQueries({ queryKey: ['projects'] })
+      client.invalidateQueries({ queryKey: ['notes'] })
+      client.invalidateQueries({ queryKey: ['jobs'] })
+      client.invalidateQueries({ queryKey: ['suggestions'] })
+    },
+  })
+}
+
+export const useMergeProjects = () => useProjectMutation(api.mergeProjects)
+
+export const useReparentProject = () => useProjectMutation(api.reparentProject)
+
+export const useDeleteProject = () => useProjectMutation(api.deleteProject)
+
+export const useRequestOverview = () => useProjectMutation(api.requestOverview)
+
+export const useSuggestions = () => useSuspenseQuery({ queryKey: ['suggestions'], queryFn: api.suggestions })
+
+export const useDecideSuggestion = () => {
+  const client = useQueryClient()
+  return useMutation({
+    mutationFn: api.decideSuggestion,
+    onSuccess: () => {
+      client.invalidateQueries({ queryKey: ['suggestions'] })
+      client.invalidateQueries({ queryKey: ['projects'] })
+      client.invalidateQueries({ queryKey: ['notes'] })
+    },
+  })
+}
+
 export const useNotes = (project?: string) => useSuspenseQuery({ queryKey: ['notes', project], queryFn: () => api.notes(project) })
 
 export const useNote = (path: string) => useSuspenseQuery({ queryKey: ['note', path], queryFn: () => api.note(path) })

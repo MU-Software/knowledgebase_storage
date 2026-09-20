@@ -1,7 +1,9 @@
 from __future__ import annotations
 
+import json
 from datetime import UTC, datetime
 from enum import StrEnum
+from hashlib import sha256
 from typing import TYPE_CHECKING, Any
 from uuid import UUID, uuid4
 
@@ -23,6 +25,9 @@ PROMPT_OVERHEAD_TOKENS = 4096
 MIN_BUDGET_TOKENS = 2048
 MIN_CONTEXT_TOKENS = PROMPT_OVERHEAD_TOKENS + MIN_BUDGET_TOKENS
 API_KEY_PREFIX = "kbs_"
+BACKGROUND_PRIORITY = 10
+BACKGROUND_AGENT = "kbstore"
+BACKGROUND_DEVICE = "server"
 PASSWORD_HASHER = PasswordHasher()
 
 
@@ -31,6 +36,19 @@ class JobStatus(StrEnum):
     CLAIMED = "claimed"
     DONE = "done"
     FAILED = "failed"
+
+
+class JobKind(StrEnum):
+    SESSION = "session"
+    MEMORY_MERGE = "memory_merge"
+    PROJECT_OVERVIEW = "project_overview"
+    PROJECT_SUGGESTION = "project_suggestion"
+    NOTE_RELATIONS = "note_relations"
+
+
+class SuggestionKind(StrEnum):
+    MERGE = "merge"
+    NEST = "nest"
 
 
 class ProviderKind(StrEnum):
@@ -43,6 +61,10 @@ class ProjectInference(StrEnum):
     WORKTREE = "worktree"
     CWD = "cwd"
     SCRATCH = "scratch"
+
+
+def background_session(kind: JobKind, target: str = "") -> str:
+    return f"{kind.value}:{target}"
 
 
 def enum_type(enum_class: type[StrEnum]) -> Enum:
@@ -88,9 +110,17 @@ class JobBase(SQLModel):
     project_inference: ProjectInference = Field(sa_type=enum_type(ProjectInference))
     cwd: str | None = None
 
-    transcript: list[dict[str, Any]] | None = Field(default=None, sa_type=JSONB)
+    transcript: list[dict[str, Any]] | None = Field(default=None, sa_type=JSONB(none_as_null=True))
     started_at: datetime | None = Field(default=None, sa_type=DateTime(timezone=True))
     ended_at: datetime | None = Field(default=None, sa_type=DateTime(timezone=True))
+
+    @staticmethod
+    def digest_of(messages: list[dict[str, Any]] | None) -> str:
+        return sha256(json.dumps(messages, ensure_ascii=False, sort_keys=True).encode()).hexdigest()
+
+    @property
+    def digest(self) -> str:
+        return self.digest_of(self.transcript)
 
 
 class Job(UUIDMixin, TimestampMixin, JobBase, table=True):
@@ -100,6 +130,8 @@ class Job(UUIDMixin, TimestampMixin, JobBase, table=True):
         UniqueConstraint("agent", "device", "session_id", name="uq_job_session"),
     )
 
+    kind: JobKind = Field(default=JobKind.SESSION, sa_type=enum_type(JobKind))
+    priority: int = 0
     status: JobStatus = Field(default=JobStatus.PENDING, sa_type=enum_type(JobStatus))
     last_activity_at: datetime = Field(sa_type=DateTime(timezone=True), sa_column_kwargs={"server_default": text("now()")})
     transcript_digest: str | None = None
@@ -115,6 +147,27 @@ class Job(UUIDMixin, TimestampMixin, JobBase, table=True):
     summarizer: str | None = None
     note_path: str | None = None
     completed_at: datetime | None = Field(default=None, sa_type=DateTime(timezone=True))
+    refined_at: datetime | None = Field(default=None, sa_type=DateTime(timezone=True))
+
+
+class ProjectAlias(UUIDMixin, TimestampMixin, table=True):
+    __tablename__ = "project_alias"
+
+    source: str = Field(unique=True, index=True)
+    slug: str = Field(index=True)
+
+
+class ProjectSuggestion(UUIDMixin, TimestampMixin, table=True):
+    __tablename__ = "project_suggestion"
+    __table_args__ = (UniqueConstraint("kind", "source", "target", name="uq_project_suggestion"),)
+
+    kind: SuggestionKind = Field(sa_type=enum_type(SuggestionKind))
+    source: str = Field(index=True)
+    target: str
+    reason: str
+    summarizer: str = ""
+    applied_at: datetime | None = Field(default=None, sa_type=DateTime(timezone=True))
+    dismissed_at: datetime | None = Field(default=None, sa_type=DateTime(timezone=True))
 
 
 class RuntimeSettingBase(SQLModel):
@@ -130,6 +183,10 @@ class RuntimeSettingBase(SQLModel):
     login_failure_window_minutes: int = Field(default=15, ge=1)
     login_max_failures_per_ip: int = Field(default=5, ge=1)
     login_max_failures_per_username: int = Field(default=20, ge=1)
+    overview_min_new_logs: int = Field(default=5, ge=1)
+    overview_max_age_days: int = Field(default=7, ge=1)
+    background_sweep_hours: int = Field(default=24, ge=1)
+    background_batch_size: int = Field(default=3, ge=1)
 
 
 class RuntimeSetting(TimestampMixin, RuntimeSettingBase, table=True):
@@ -147,6 +204,7 @@ class LLMProviderBase(SQLModel):
     priority: int = Field(default=100, ge=0)
     min_job_age_seconds: int = Field(default=0, ge=0)
     max_concurrency: int = Field(default=1, ge=1)
+    background_jobs: bool = True
     connect_timeout_seconds: float = Field(default=5.0, gt=0)
     timeout_seconds: float = Field(default=600.0, gt=0)
     enabled: bool = True

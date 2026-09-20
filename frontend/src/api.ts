@@ -2,21 +2,52 @@ export type NoteSummary = {
   path: string
   title: string
   project: string
+  project_path: string
   tags: string[]
   source: Record<string, unknown>
 }
 
 export type NoteDetail = NoteSummary & { content: string }
 
-export type ProjectSummary = {
+export type ProjectNode = {
+  path: string
   name: string
+  parent: string | null
+  depth: number
   note_count: number
-
+  total_note_count: number
+  child_count: number
   unconfirmed: boolean
+  aliases: string[]
+  overview: string | null
+}
+
+export type Suggestion = {
+  id: string
+  kind: 'merge' | 'nest'
+  source: string
+  target: string
+  reason: string
+  summarizer: string
+  created_at: string
+}
+
+export type ProjectMergeResult = {
+  project: string
+  moved: number
+  archived: string[]
+  merging: string[]
+}
+
+export type ProjectDeleteResult = {
+  path: string
+  deleted_notes: number
+  deleted_projects: string[]
 }
 
 export type Job = {
   id: string
+  kind: 'session' | 'memory_merge' | 'project_overview' | 'project_suggestion' | 'note_relations'
   status: 'pending' | 'claimed' | 'done' | 'failed'
   agent: string
   device: string
@@ -138,7 +169,15 @@ export const api = {
   updateProvider: (id: string, patch: Partial<LLMProvider> & { api_key?: string }) => send<LLMProvider>('PATCH', `/llm-providers/${id}`, patch),
   deleteProvider: (id: string) => send<void>('DELETE', `/llm-providers/${id}`),
   testProvider: (id: string) => send<ProviderTestResult>('POST', `/llm-providers/${id}/test`),
-  projects: () => get<ProjectSummary[]>('/wiki/projects'),
+  projects: () => get<ProjectNode[]>('/wiki/projects'),
+  mergeProjects: (payload: { source: string; target: string }) => send<ProjectMergeResult>('POST', '/wiki/projects/merge', payload),
+  reparentProject: ({ name, parent }: { name: string; parent: string | null }) =>
+    send<ProjectNode>('PATCH', `/wiki/projects/${encodeURIComponent(name)}`, { parent }),
+  deleteProject: (name: string) => send<ProjectDeleteResult>('DELETE', `/wiki/projects/${encodeURIComponent(name)}`),
+  requestOverview: (name: string) => send<Job | null>('POST', `/wiki/projects/${encodeURIComponent(name)}/overview`),
+  suggestions: () => get<Suggestion[]>('/wiki/suggestions'),
+  decideSuggestion: ({ id, applied }: { id: string; applied: boolean }) =>
+    send<Suggestion>('POST', `/wiki/suggestions/${id}/${applied ? 'apply' : 'dismiss'}`),
   notes: (project?: string) => get<NoteSummary[]>(`/wiki/notes${project ? `?project=${encodeURIComponent(project)}` : ''}`),
   note: (path: string) => get<NoteDetail>(`/wiki/notes/${path}`),
   search: (q: string) => get<NoteSummary[]>(`/wiki/search?q=${encodeURIComponent(q)}`),
@@ -175,6 +214,10 @@ export type RuntimeSetting = {
   login_failure_window_minutes: number
   login_max_failures_per_ip: number
   login_max_failures_per_username: number
+  overview_min_new_logs: number
+  overview_max_age_days: number
+  background_sweep_hours: number
+  background_batch_size: number
   updated_at: string
 }
 
@@ -194,6 +237,7 @@ export type LLMProvider = {
   priority: number
   min_job_age_seconds: number
   max_concurrency: number
+  background_jobs: boolean
   connect_timeout_seconds: number
   timeout_seconds: number
   enabled: boolean

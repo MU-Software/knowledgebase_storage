@@ -5,12 +5,14 @@ import logging
 from contextlib import contextmanager, suppress
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
+from pathlib import PurePosixPath
 from socket import gethostname
 from typing import TYPE_CHECKING, Any
 
 import typer
 from httpx import AsyncClient, codes
 
+from backend.models import JobKind
 from backend.schemas import WorkerConfig
 from backend.summarizers import build_summarizer
 
@@ -81,8 +83,41 @@ def partition(providers: list[LLMProviderResolved], job: dict[str, Any]) -> tupl
     return ready, min(waits) if waits else None
 
 
-def fallback_order(config: WorkerConfig, first: LLMProviderResolved) -> list[LLMProviderResolved]:
-    return [first, *(provider for provider in config.providers if provider.name != first.name)]
+def fallback_order(config: WorkerConfig, first: LLMProviderResolved, job: dict[str, Any]) -> list[LLMProviderResolved]:
+    order = [first, *(provider for provider in config.providers if provider.name != first.name)]
+    if job.get("priority"):
+        order = [provider for provider in order if provider.background_jobs]
+    if not job.get("refined_at"):
+        return order
+
+    previous = next((provider for provider in config.providers if provider.name == job.get("summarizer")), None)
+    return [first] if previous is None else [provider for provider in order if provider.priority < previous.priority]
+
+
+async def produce(job: dict[str, Any], provider: LLMProviderResolved, language: str) -> tuple[str, dict[str, Any]]:
+    summarizer = build_summarizer(provider, language)
+    kind, project = job.get("kind"), job["project"]
+    records, targets = job.get("transcript") or [], job.get("targets") or []
+
+    if kind == JobKind.MEMORY_MERGE:
+        name = PurePosixPath(job.get("note_path") or "memory.md").name
+        return "memory", {"content": await summarizer.merge_memories(records, project=project, name=name)}
+    if kind == JobKind.PROJECT_OVERVIEW:
+        page = await summarizer.summarize_project(records, project=project, children=targets)
+        return "overview", page.model_dump(mode="json")
+    if kind == JobKind.PROJECT_SUGGESTION:
+        return "suggestions", (await summarizer.suggest_projects(records)).model_dump(mode="json")
+    if kind == JobKind.NOTE_RELATIONS:
+        return "relations", (await summarizer.find_relations(records, candidates=targets)).model_dump(mode="json")
+
+    result = await summarizer.summarize(
+        records,
+        agent=job["agent"],
+        project=project,
+        device=job["device"],
+        background=job.get("context", ""),
+    )
+    return "result", result.model_dump(mode="json")
 
 
 async def release(api: AsyncClient, job_id: str, token: str, retry_after: int) -> None:
@@ -95,7 +130,7 @@ async def process(api: AsyncClient, job: dict[str, Any], config: WorkerConfig, f
     errors: list[str] = []
     busy = False
 
-    providers, next_eligible_in = partition(fallback_order(config, first), job)
+    providers, next_eligible_in = partition(fallback_order(config, first, job), job)
     if not providers:
         logger.info("no provider is eligible for job %s yet; releasing it", job_id)
         await release(api, job_id, token, next_eligible_in or 0)
@@ -108,10 +143,9 @@ async def process(api: AsyncClient, job: dict[str, Any], config: WorkerConfig, f
                 busy = True
                 continue
 
-            logger.info("summarizing job %s with %s (project=%s)", job_id, provider.name, job["project"])
+            logger.info("working job %s (%s) with %s (project=%s)", job_id, job.get("kind"), provider.name, job["project"])
             try:
-                summarizer = build_summarizer(provider, config.document_language)
-                result = await summarizer.summarize(job["transcript"], agent=job["agent"], project=job["project"], device=job["device"])
+                endpoint, body = await produce(job, provider, config.document_language)
             except Exception as exc:  # noqa: BLE001
                 logger.warning("provider %s failed on job %s: %s", provider.name, job_id, exc)
                 errors.append(f"{provider.name}: {exc}")
@@ -119,9 +153,9 @@ async def process(api: AsyncClient, job: dict[str, Any], config: WorkerConfig, f
 
         try:
             response = await api.post(
-                f"/api/jobs/{job_id}/result",
+                f"/api/jobs/{job_id}/{endpoint}",
                 params={"summarizer": provider.name, "token": token},
-                json=result.model_dump(mode="json"),
+                json=body,
             )
             response.raise_for_status()
         except Exception:
@@ -161,7 +195,11 @@ async def slot(api: AsyncClient, worker: str, key: SlotKey, cache: ConfigCache, 
         try:
             claimed = await api.post(
                 "/api/jobs/claim",
-                params={"worker": f"{worker}:{provider.name}", "min_age_seconds": provider.min_job_age_seconds},
+                params={
+                    "worker": f"{worker}:{provider.name}",
+                    "provider": provider.name,
+                    "min_age_seconds": provider.min_job_age_seconds,
+                },
             )
             claimed.raise_for_status()
             job = None if claimed.status_code == codes.NO_CONTENT else claimed.json()

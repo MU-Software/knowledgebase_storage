@@ -34,6 +34,15 @@ Three rules shape the design:
 - **One place calls the LLMs.** Providers live in the database, gated by job age. Each one
   claims its own jobs, so they run in parallel, and falls back to the others by priority when
   it fails. The API only owns the queue and its housekeeping.
+- **Projects are directories.** `projects/<name>/` holds one project's notes, and a project filed
+  under another is a directory inside it: its sessions start with the parent's notes as background.
+  The wiki moves, merges and deletes them, and a merged name redirects to where it went, so the
+  hooks keep sending whatever the git remote says.
+- **Idle providers keep the place tidy.** Session jobs come first; when none is waiting, a provider
+  that takes background work rewrites each project's `overview.md` from its notes and the pages of
+  the projects under it, proposes projects that should be merged or nested, links notes to the ones
+  they continue, and redoes the summaries a weaker provider wrote while the transcript is still inside
+  `transcript_retention_hours`. Leave that off for a provider you pay per token.
 - **Only bootstrap values live in the environment.** Everything else is a database row you
   edit in the wiki, which the worker fetches with an ETag and a 304.
 

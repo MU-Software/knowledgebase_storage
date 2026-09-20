@@ -22,6 +22,10 @@ const RUNTIME_FIELDS: Field<keyof RuntimeSetting>[] = [
   { key: 'login_failure_window_minutes', label: 'Sign-in failure window (min)', type: 'number' },
   { key: 'login_max_failures_per_ip', label: 'Max sign-in failures per IP', type: 'number' },
   { key: 'login_max_failures_per_username', label: 'Max sign-in failures per user', type: 'number' },
+  { key: 'overview_min_new_logs', label: 'Rewrite overview after (sessions)', type: 'number' },
+  { key: 'overview_max_age_days', label: 'Rewrite overview after (days)', type: 'number' },
+  { key: 'background_sweep_hours', label: 'Look for related projects every (h)', type: 'number' },
+  { key: 'background_batch_size', label: 'Background jobs in flight', type: 'number' },
 ]
 
 const PROVIDER_FIELDS: Field<keyof LLMProvider | 'api_key'>[] = [
@@ -100,7 +104,7 @@ const ProviderForm = ({ provider }: { provider?: LLMProvider }) => {
 
   const persist = (form: HTMLFormElement) => {
     const values = formValues(form)
-    const patch: Record<string, unknown> = { ...values, enabled: values.enabled === 'on' }
+    const patch: Record<string, unknown> = { ...values, enabled: values.enabled === 'on', background_jobs: values.background_jobs === 'on' }
     for (const { key, type } of PROVIDER_FIELDS) {
       if (type === 'number' && patch[key] !== undefined) patch[key] = Number(patch[key])
     }
@@ -146,6 +150,9 @@ const ProviderForm = ({ provider }: { provider?: LLMProvider }) => {
         ))}
         <FieldRow id={`${prefix}-enabled`} label="Enabled">
           <Checkbox id={`${prefix}-enabled`} name="enabled" defaultChecked={provider?.enabled ?? true} />
+        </FieldRow>
+        <FieldRow id={`${prefix}-background_jobs`} label="Takes background work">
+          <Checkbox id={`${prefix}-background_jobs`} name="background_jobs" defaultChecked={provider?.background_jobs ?? true} />
         </FieldRow>
       </Stack>
       <Stack direction="row" spacing={1} sx={{ mt: 2 }}>

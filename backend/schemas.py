@@ -7,15 +7,15 @@ from uuid import UUID
 import frontmatter
 from pydantic import BaseModel, Field
 
-from backend.models import MIN_CONTEXT_TOKENS, JobBase, JobStatus, LLMProviderBase, ProviderKind, RuntimeSettingBase
+from backend.consts.notes import UNFILED, project_segments
+from backend.models import MIN_CONTEXT_TOKENS, JobBase, JobKind, JobStatus, LLMProviderBase, ProviderKind, RuntimeSettingBase, SuggestionKind
 
 if TYPE_CHECKING:
     from pathlib import Path
 
 ObservationCategory = Literal["decision", "problem", "next", "fact", "idea"]
 MemoryFileName = Annotated[str, Field(pattern=r"^[^/\\]+\.md$")]
-
-PROJECT_PATH_SEGMENTS = 2
+ProjectName = Annotated[str, Field(min_length=1, max_length=200)]
 
 
 class Observation(BaseModel):
@@ -37,12 +37,44 @@ class SummaryResult(BaseModel):
     tags: list[str] = Field(default_factory=list)
 
 
+class SuggestedLink(BaseModel):
+    kind: SuggestionKind = Field(description="merge when the two are the same work, nest when one belongs under the other")
+    source: str = Field(description="name of the project that is absorbed or moves")
+    target: str = Field(description="name of the project it joins")
+    reason: str = Field(description="One sentence on what makes them the same work.")
+
+
+class ProjectSuggestions(BaseModel):
+    suggestions: list[SuggestedLink] = Field(default_factory=list)
+
+
+class NoteRelations(BaseModel):
+    relations: list[Relation] = Field(default_factory=list)
+
+
+class SuggestionPublic(BaseModel):
+    id: UUID
+    kind: SuggestionKind
+    source: str
+    target: str
+    reason: str
+    summarizer: str
+    created_at: datetime
+
+
+class ProjectOverview(SummaryResult):
+    title: str = Field(description="The name of the project, not the title of a session.")
+    summary: str = Field(description="Two to five sentences on what the project is and where it stands now.")
+    observations: list[Observation] = Field(default_factory=list, description="What holds, what is open and what is queued for this project.")
+
+
 class JobFailRequest(BaseModel):
     error: str
 
 
 class JobPublic(JobBase):
     id: UUID
+    kind: JobKind
     status: JobStatus
     created_at: datetime
     last_activity_at: datetime
@@ -61,6 +93,7 @@ class NoteSummary(BaseModel):
     path: str
     title: str
     project: str
+    project_path: str
     tags: list[str] = Field(default_factory=list)
     source: dict[str, Any] = Field(default_factory=dict)
 
@@ -70,11 +103,12 @@ class NoteSummary(BaseModel):
         source = post.metadata.get("source")
         tags = post.metadata.get("tags")
         relative = path.relative_to(root).as_posix()
-        parts = relative.split("/")
+        segments = project_segments(relative)
         fields = {
             "path": relative,
             "title": str(post.metadata.get("title") or path.stem),
-            "project": parts[1] if len(parts) > PROJECT_PATH_SEGMENTS and parts[0] == "projects" else "_unfiled",
+            "project": segments[-1] if segments else UNFILED,
+            "project_path": "/".join(segments) if segments else UNFILED,
             "tags": [str(tag) for tag in tags] if isinstance(tags, list) else [],
             "source": source if isinstance(source, dict) else {},
         }
@@ -95,10 +129,60 @@ class NoteDetail(NoteSummary):
         return cls(**fields, content=content)
 
 
-class ProjectSummary(BaseModel):
+class ProjectNode(BaseModel):
+    path: str = Field(description="where the project sits under the notes directory, e.g. pyconkr/pyconkr-backend")
     name: str
-    note_count: int
+    parent: str | None
+    depth: int
+    note_count: int = Field(description="notes filed under this project itself")
+    total_note_count: int = Field(description="notes filed under this project and everything below it")
+    child_count: int
     unconfirmed: bool
+    aliases: list[str] = Field(default_factory=list, description="inferred names a merge redirected here")
+    overview: str | None = Field(default=None, description="path of the note that summarizes the project, once one has been written")
+
+
+class ProjectMerge(BaseModel):
+    source: ProjectName
+    target: ProjectName
+
+
+class ProjectMergeResult(BaseModel):
+    project: str
+    moved: int = Field(description="notes that changed hands")
+    archived: list[str] = Field(default_factory=list, description="colliding memory files kept under archive/")
+    merging: list[str] = Field(default_factory=list, description="memory files an LLM is merging in the background")
+
+
+class ProjectReparent(BaseModel):
+    parent: ProjectName | None = Field(default=None, description="the project to file this one under, or null for the top level")
+
+
+class ProjectDeleteResult(BaseModel):
+    path: str
+    deleted_notes: int
+    deleted_projects: list[str]
+
+
+class MemoryContent(BaseModel):
+    content: str
+
+
+class JobClaimed(BaseModel):
+    id: UUID
+    kind: JobKind
+    priority: int
+    agent: str
+    device: str
+    project: str
+    note_path: str | None
+    summarizer: str | None
+    refined_at: datetime | None
+    last_activity_at: datetime
+    claim_token: UUID | None
+    transcript: list[dict[str, Any]] | None
+    context: str = Field(default="", description="notes from the projects above this one, as background for the summary")
+    targets: list[str] = Field(default_factory=list, description="the names this job works with: child projects, or the notes it may link to")
 
 
 class RuntimeSettingUpdate(BaseModel):
@@ -114,6 +198,10 @@ class RuntimeSettingUpdate(BaseModel):
     login_failure_window_minutes: int | None = Field(default=None, ge=1)
     login_max_failures_per_ip: int | None = Field(default=None, ge=1)
     login_max_failures_per_username: int | None = Field(default=None, ge=1)
+    overview_min_new_logs: int | None = Field(default=None, ge=1)
+    overview_max_age_days: int | None = Field(default=None, ge=1)
+    background_sweep_hours: int | None = Field(default=None, ge=1)
+    background_batch_size: int | None = Field(default=None, ge=1)
 
 
 class RuntimeSettingPublic(RuntimeSettingBase):
@@ -134,6 +222,7 @@ class LLMProviderUpdate(BaseModel):
     priority: int | None = Field(default=None, ge=0)
     min_job_age_seconds: int | None = Field(default=None, ge=0)
     max_concurrency: int | None = Field(default=None, ge=1)
+    background_jobs: bool | None = None
     connect_timeout_seconds: float | None = Field(default=None, gt=0)
     timeout_seconds: float | None = Field(default=None, gt=0)
     enabled: bool | None = None

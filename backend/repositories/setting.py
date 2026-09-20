@@ -30,6 +30,10 @@ class LLMProviderRepository(DBRepositoryImpl[LLMProvider]):
         query = select(LLMProvider).where(col(LLMProvider.enabled).is_(True)).order_by(col(LLMProvider.priority))
         return (await self.session.exec(query)).all()
 
+    async def find_by_name(self, name: str) -> LLMProvider | None:
+        query = select(LLMProvider).where(col(LLMProvider.name) == name)
+        return (await self.session.exec(query)).first()
+
     async def delete(self, provider: LLMProvider) -> None:
         await self.session.delete(provider)
         await self.session.commit()

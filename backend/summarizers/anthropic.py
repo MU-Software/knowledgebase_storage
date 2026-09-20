@@ -6,7 +6,6 @@ from typing import TYPE_CHECKING, Any
 from anthropic import AsyncAnthropic
 
 from backend.summarizers.base import Summarizer
-from backend.summarizers.prompt import RESULT_JSON_SCHEMA
 
 if TYPE_CHECKING:
     from backend.schemas import LLMProviderResolved
@@ -21,14 +20,14 @@ class AnthropicSummarizer(Summarizer):
         self.context_tokens = provider.context_tokens
         self.language = language
 
-    async def complete(self, system: str, user: str, *, structured: bool) -> str:
+    async def complete(self, system: str, user: str, *, schema: dict[str, Any] | None = None) -> str:
         structured_kwargs: dict[str, Any] = (
-            {
-                "tools": [{"name": TOOL_NAME, "description": "Return the note you assembled.", "input_schema": RESULT_JSON_SCHEMA}],
+            {}
+            if schema is None
+            else {
+                "tools": [{"name": TOOL_NAME, "description": "Return what you assembled.", "input_schema": schema}],
                 "tool_choice": {"type": "tool", "name": TOOL_NAME},
             }
-            if structured
-            else {}
         )
         response = await self.client.messages.create(
             model=self.model,
@@ -38,9 +37,9 @@ class AnthropicSummarizer(Summarizer):
             **structured_kwargs,
         )
         for block in response.content:
-            if structured and block.type == "tool_use":
+            if schema is not None and block.type == "tool_use":
                 return json.dumps(block.input, ensure_ascii=False)
-            if not structured and block.type == "text":
+            if schema is None and block.type == "text":
                 return block.text
         message = "no expected block in the Anthropic response"
         raise RuntimeError(message)

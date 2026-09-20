@@ -17,6 +17,7 @@ const Jobs = () => {
       <TableHead>
         <TableRow>
           <TableCell>Status</TableCell>
+          <TableCell>Work</TableCell>
           <TableCell>Project</TableCell>
           <TableCell>Agent</TableCell>
           <TableCell>Device</TableCell>
@@ -31,6 +32,7 @@ const Jobs = () => {
             <TableCell>
               <Chip size="small" color={STATUS_COLOR[job.status]} label={job.status} />
             </TableCell>
+            <TableCell>{job.kind.replace('_', ' ')}</TableCell>
             <TableCell>{job.project}</TableCell>
             <TableCell>{job.agent}</TableCell>
             <TableCell>{job.device}</TableCell>

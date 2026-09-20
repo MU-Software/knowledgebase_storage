@@ -1,11 +1,10 @@
 from __future__ import annotations
 
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Any
 
 from httpx import AsyncClient, Timeout
 
 from backend.summarizers.base import Summarizer
-from backend.summarizers.prompt import RESULT_JSON_SCHEMA
 
 if TYPE_CHECKING:
     from backend.schemas import LLMProviderResolved
@@ -25,7 +24,7 @@ class LlamaCppSummarizer(Summarizer):
         self.context_tokens = provider.context_tokens
         self.language = language
 
-    async def complete(self, system: str, user: str, *, structured: bool) -> str:
+    async def complete(self, system: str, user: str, *, schema: dict[str, Any] | None = None) -> str:
         payload: dict[str, object] = {
             "model": self.model,
             "messages": [{"role": "system", "content": system}, {"role": "user", "content": user}],
@@ -33,16 +32,13 @@ class LlamaCppSummarizer(Summarizer):
             # summarizing is extraction, not deduction; non-reasoning templates ignore this
             "chat_template_kwargs": {"enable_thinking": False},
         }
-        if structured:
-            payload["response_format"] = {
-                "type": "json_schema",
-                "json_schema": {"name": "summary_result", "schema": RESULT_JSON_SCHEMA},
-            }
+        if schema is not None:
+            payload["response_format"] = {"type": "json_schema", "json_schema": {"name": "result", "schema": schema}}
 
         response = await self.client.post("/chat/completions", json=payload)
         response.raise_for_status()
         content = response.json()["choices"][0]["message"].get("content") or ""
-        if structured:
+        if schema is not None:
             start, end = content.find("{"), content.rfind("}")
             if start == -1 or end == -1:
                 message = f"no JSON object found in response: {content[:200]}"

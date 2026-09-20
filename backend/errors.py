@@ -137,12 +137,18 @@ class ClientError(ErrorEnum):
         "RESOURCE_ALREADY_EXISTS": ErrorStructDict(status_code=status.HTTP_409_CONFLICT),
         "STALE_CLAIM": ErrorStructDict(status_code=status.HTTP_409_CONFLICT),
         "INVALID_NOTE_PATH": ErrorStructDict(status_code=status.HTTP_400_BAD_REQUEST),
+        "INVALID_PROJECT_MERGE": ErrorStructDict(status_code=status.HTTP_400_BAD_REQUEST),
+        "INVALID_PROJECT_PARENT": ErrorStructDict(status_code=status.HTTP_400_BAD_REQUEST),
+        "INVALID_MEMORY_PATH": ErrorStructDict(status_code=status.HTTP_400_BAD_REQUEST),
     }
 
     RESOURCE_NOT_FOUND = "The {resource} was not found."
     RESOURCE_ALREADY_EXISTS = "The {resource} already exists."
     STALE_CLAIM = "Job {job_id} is no longer held by this claim."
     INVALID_NOTE_PATH = "A note path must stay inside the notes directory and end with .md: {path}"
+    INVALID_PROJECT_MERGE = "A project cannot be merged into itself or into one of the projects it holds."
+    INVALID_PROJECT_PARENT = "A project cannot be filed under itself or under one of the projects it holds."
+    INVALID_MEMORY_PATH = "Job {job_id} does not point at a memory file."
 
     USERNAME_REQUIRED = "Enter a username."
     USERNAME_TOO_SHORT = "The username is too short. Use {min_len} to {max_len} characters."
