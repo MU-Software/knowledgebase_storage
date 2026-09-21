@@ -84,9 +84,9 @@ class JobService(ServiceImpl[JobRepository]):
         self.verify_claim(job, token)
         return job
 
-    async def list_jobs(self, job_status: JobStatus | None, limit: int) -> Sequence[Job]:
+    async def list_jobs(self, job_status: JobStatus | None, offset: int, limit: int) -> tuple[Sequence[Job], int]:
         query_filter = true() if job_status is None else col(Job.status) == job_status
-        return await self.repository.list(query_filter=query_filter, limit=limit)
+        return await self.repository.page(query_filter, offset, limit)
 
     def verify_claim(self, job: Job, token: UUID) -> None:
         if job.status is not JobStatus.CLAIMED or job.claim_token != token:

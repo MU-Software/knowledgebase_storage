@@ -63,6 +63,11 @@ export type Job = {
   completed_at: string | null
 }
 
+export type JobPage = {
+  items: Job[]
+  total: number
+}
+
 export class APIError extends Error {
   status: number
 
@@ -176,12 +181,12 @@ export const api = {
   deleteProject: (name: string) => send<ProjectDeleteResult>('DELETE', `/wiki/projects/${encodeURIComponent(name)}`),
   requestOverview: (name: string) => send<Job | null>('POST', `/wiki/projects/${encodeURIComponent(name)}/overview`),
   suggestions: () => get<Suggestion[]>('/wiki/suggestions'),
-  decideSuggestion: ({ id, applied }: { id: string; applied: boolean }) =>
-    send<Suggestion>('POST', `/wiki/suggestions/${id}/${applied ? 'apply' : 'dismiss'}`),
+  decideSuggestion: ({ id, applied, reverse = false }: { id: string; applied: boolean; reverse?: boolean }) =>
+    send<Suggestion>('POST', `/wiki/suggestions/${id}/${applied ? `apply?reverse=${reverse}` : 'dismiss'}`),
   notes: (project?: string) => get<NoteSummary[]>(`/wiki/notes${project ? `?project=${encodeURIComponent(project)}` : ''}`),
   note: (path: string) => get<NoteDetail>(`/wiki/notes/${path}`),
   search: (q: string) => get<NoteSummary[]>(`/wiki/search?q=${encodeURIComponent(q)}`),
-  jobs: () => get<Job[]>('/jobs'),
+  jobs: ({ offset, limit }: { offset: number; limit: number }) => get<JobPage>(`/jobs?offset=${offset}&limit=${limit}`),
 }
 
 export type User = {

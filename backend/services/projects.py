@@ -227,13 +227,14 @@ class ProjectService(ServiceImpl[ProjectRepository]):
                     await self.request_overview(leaf_of(affected))
         return next(node for node in await self.tree() if node.path == destination)
 
-    async def decide_suggestion(self, suggestion_id: UUID, *, applied: bool) -> SuggestionPublic:
+    async def decide_suggestion(self, suggestion_id: UUID, *, applied: bool, reverse: bool = False) -> SuggestionPublic:
         suggestion = await self.suggestions.retrieve_by_id(suggestion_id)
         public = SuggestionPublic.model_validate(suggestion, from_attributes=True)
+        source, target = (suggestion.target, suggestion.source) if reverse else (suggestion.source, suggestion.target)
         if applied and suggestion.kind is SuggestionKind.MERGE:
-            await self.merge(ProjectMerge(source=suggestion.source, target=suggestion.target))
+            await self.merge(ProjectMerge(source=source, target=target))
         elif applied:
-            await self.reparent(suggestion.source, suggestion.target)
+            await self.reparent(source, target)
         await self.suggestions.decide(suggestion_id, applied=applied)
         return public
 

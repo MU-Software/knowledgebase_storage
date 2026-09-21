@@ -6,7 +6,7 @@ from uuid import UUID
 from fastapi import APIRouter, Query, Response, status
 
 from backend.models import JobBase, JobStatus
-from backend.schemas import JobClaimed, JobFailRequest, JobPublic, MemoryContent, NoteRelations, ProjectSuggestions, SummaryResult
+from backend.schemas import JobClaimed, JobFailRequest, JobPage, JobPublic, MemoryContent, NoteRelations, ProjectSuggestions, SummaryResult
 from backend.services.background import backgroundServiceDI
 from backend.services.jobs import jobServiceDI
 
@@ -122,7 +122,8 @@ async def release(
 async def list_jobs(
     service: jobServiceDI,
     job_status: Annotated[JobStatus | None, Query(alias="status")] = None,
-    limit: Annotated[int, Query(le=MAX_LIST_LIMIT)] = DEFAULT_LIST_LIMIT,
-) -> list[JobPublic]:
-    jobs = await service.list_jobs(job_status, limit)
-    return [JobPublic.model_validate(job, from_attributes=True) for job in jobs]
+    offset: Annotated[int, Query(ge=0)] = 0,
+    limit: Annotated[int, Query(ge=1, le=MAX_LIST_LIMIT)] = DEFAULT_LIST_LIMIT,
+) -> JobPage:
+    jobs, total = await service.list_jobs(job_status, offset, limit)
+    return JobPage(items=[JobPublic.model_validate(job, from_attributes=True) for job in jobs], total=total)

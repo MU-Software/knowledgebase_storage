@@ -89,6 +89,11 @@ class JobPublic(JobBase):
     transcript: list[dict[str, Any]] | None = Field(default=None, exclude=True)
 
 
+class JobPage(BaseModel):
+    items: list[JobPublic]
+    total: int
+
+
 class NoteSummary(BaseModel):
     path: str
     title: str

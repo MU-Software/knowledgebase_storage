@@ -52,8 +52,13 @@ async def suggestions(repository: projectSuggestionRepositoryDI) -> list[Suggest
 
 
 @owner_router.post("/suggestions/{suggestion_id}/apply")
-async def apply_suggestion(suggestion_id: UUID, service: projectServiceDI) -> SuggestionPublic:
-    return await service.decide_suggestion(suggestion_id, applied=True)
+async def apply_suggestion(
+    suggestion_id: UUID,
+    service: projectServiceDI,
+    *,
+    reverse: Annotated[bool, Query(description="swap source and target, e.g. merge the target into the source")] = False,
+) -> SuggestionPublic:
+    return await service.decide_suggestion(suggestion_id, applied=True, reverse=reverse)
 
 
 @owner_router.post("/suggestions/{suggestion_id}/dismiss")

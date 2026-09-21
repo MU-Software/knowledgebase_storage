@@ -82,7 +82,8 @@ export const useNotes = (project?: string) => useSuspenseQuery({ queryKey: ['not
 
 export const useNote = (path: string) => useSuspenseQuery({ queryKey: ['note', path], queryFn: () => api.note(path) })
 
-export const useJobs = () => useSuspenseQuery({ queryKey: ['jobs'], queryFn: api.jobs, refetchInterval: 10_000 })
+export const useJobs = (offset: number, limit: number) =>
+  useSuspenseQuery({ queryKey: ['jobs', offset, limit], queryFn: () => api.jobs({ offset, limit }), refetchInterval: 10_000 })
 
 export const useSearch = (query: string) => useSuspenseQuery({ queryKey: ['search', query], queryFn: () => api.search(query) })
 

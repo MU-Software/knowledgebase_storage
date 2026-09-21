@@ -15,6 +15,7 @@ import {
   Paper,
   Stack,
   TextField,
+  Tooltip,
   Typography,
 } from '@mui/material'
 import { useState } from 'react'
@@ -54,6 +55,9 @@ const describeMerge = (result: ProjectMergeResult) => {
 const reads = (suggestion: Suggestion) =>
   suggestion.kind === 'merge' ? `Merge ${suggestion.source} into ${suggestion.target}` : `File ${suggestion.source} under ${suggestion.target}`
 
+const UNCONFIRMED =
+  'Some sessions here were filed by folder name because their directory has no git remote, so the name may not match the real project. Merge or move it if it belongs elsewhere.'
+
 const Suggestions = () => {
   const { data } = useSuggestions()
   const decide = useDecideSuggestion()
@@ -75,6 +79,17 @@ const Suggestions = () => {
             <Button size="small" variant="outlined" disabled={decide.isPending} onClick={() => decide.mutate({ id: suggestion.id, applied: true })}>
               Apply
             </Button>
+            {suggestion.kind === 'merge' && (
+              <Tooltip title={`Merge ${suggestion.target} into ${suggestion.source} instead`}>
+                <Button
+                  size="small"
+                  variant="outlined"
+                  disabled={decide.isPending}
+                  onClick={() => decide.mutate({ id: suggestion.id, applied: true, reverse: true })}>
+                  Reverse
+                </Button>
+              </Tooltip>
+            )}
             <Button size="small" disabled={decide.isPending} onClick={() => decide.mutate({ id: suggestion.id, applied: false })}>
               Dismiss
             </Button>
@@ -161,39 +176,43 @@ const Projects = () => {
       {remove.error && <Alert severity="error" sx={{ mb: 2 }}>{`Could not delete it: ${remove.error.message}`}</Alert>}
       <List>
         {data.map((project) => (
-          <ListItem
-            key={project.path}
-            disablePadding
-            secondaryAction={
-              project.path !== UNFILED && (
-                <Stack direction="row" spacing={1}>
-                  {project.overview && (
-                    <Button size="small" component={Link} to={`/notes/${encodeURI(project.overview)}`}>
-                      Overview
-                    </Button>
-                  )}
-                  <Button size="small" onClick={() => summarize.mutate(project.name)} disabled={summarize.isPending}>
-                    Summarize
-                  </Button>
-                  <Button size="small" onClick={() => setAction({ kind: 'move', project })}>
-                    Move
-                  </Button>
-                  <Button size="small" onClick={() => setAction({ kind: 'merge', project })}>
-                    Merge
-                  </Button>
-                  <Button size="small" color="error" onClick={() => confirmDelete(project)} disabled={remove.isPending}>
-                    Delete
-                  </Button>
-                </Stack>
-              )
-            }>
-            <ListItemButton
-              component={Link}
-              to={`/projects/${encodeURIComponent(project.name)}`}
-              sx={{ pl: 2 + project.depth * 3, pr: project.path === UNFILED ? 2 : 44 }}>
-              <ListItemText primary={project.name} secondary={describe(project)} />
-              {project.unconfirmed && <Chip size="small" color="warning" label="unconfirmed" />}
+          <ListItem key={project.path} disablePadding>
+            <ListItemButton component={Link} to={`/projects/${encodeURIComponent(project.name)}`} sx={{ pl: 2 + project.depth * 3 }}>
+              <ListItemText
+                primary={
+                  <Stack component="span" direction="row" spacing={1} sx={{ alignItems: 'center' }}>
+                    <span>{project.name}</span>
+                    {project.unconfirmed && (
+                      <Tooltip title={UNCONFIRMED}>
+                        <Chip size="small" color="warning" label="unconfirmed" />
+                      </Tooltip>
+                    )}
+                  </Stack>
+                }
+                secondary={describe(project)}
+              />
             </ListItemButton>
+            {project.path !== UNFILED && (
+              <Stack direction="row" spacing={1} sx={{ flexShrink: 0, px: 2 }}>
+                {project.overview && (
+                  <Button size="small" component={Link} to={`/notes/${encodeURI(project.overview)}`}>
+                    Overview
+                  </Button>
+                )}
+                <Button size="small" onClick={() => summarize.mutate(project.name)} disabled={summarize.isPending}>
+                  Summarize
+                </Button>
+                <Button size="small" onClick={() => setAction({ kind: 'move', project })}>
+                  Move
+                </Button>
+                <Button size="small" onClick={() => setAction({ kind: 'merge', project })}>
+                  Merge
+                </Button>
+                <Button size="small" color="error" onClick={() => confirmDelete(project)} disabled={remove.isPending}>
+                  Delete
+                </Button>
+              </Stack>
+            )}
           </ListItem>
         ))}
       </List>

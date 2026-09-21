@@ -22,7 +22,7 @@ from backend.models import (
     ProjectInference,
     background_session,
 )
-from backend.repositories import DBRepositoryImpl, OrderByType
+from backend.repositories import DBRepositoryImpl, OrderByType, QueryType
 
 if TYPE_CHECKING:
     from collections.abc import Sequence
@@ -37,6 +37,18 @@ class JobRepository(DBRepositoryImpl[Job]):
     @property
     def order_by(self) -> OrderByType:
         return [desc(col(Job.created_at))]
+
+    async def page(self, query_filter: QueryType, offset: int, limit: int) -> tuple[Sequence[Job], int]:
+        rows = (
+            select(Job)
+            .options(defer(Job.transcript))  # type: ignore[arg-type]
+            .where(query_filter)
+            .order_by(*self.order_by)
+            .offset(offset)
+            .limit(limit)
+        )
+        total = select(func.count()).select_from(Job).where(query_filter)
+        return (await self.session.exec(rows)).all(), (await self.session.exec(total)).one()
 
     async def find_by_session(self, agent: str, device: str, session_id: str, *, lock: bool = False) -> Job | None:
         query = select(Job).where(
