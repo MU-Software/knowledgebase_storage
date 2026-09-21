@@ -39,14 +39,7 @@ class JobRepository(DBRepositoryImpl[Job]):
         return [desc(col(Job.created_at))]
 
     async def page(self, query_filter: QueryType, offset: int, limit: int) -> tuple[Sequence[Job], int]:
-        rows = (
-            select(Job)
-            .options(defer(Job.transcript))  # type: ignore[arg-type]
-            .where(query_filter)
-            .order_by(*self.order_by)
-            .offset(offset)
-            .limit(limit)
-        )
+        rows = select(Job).where(query_filter).order_by(*self.order_by).offset(offset).limit(limit)
         total = select(func.count()).select_from(Job).where(query_filter)
         return (await self.session.exec(rows)).all(), (await self.session.exec(total)).one()
 
