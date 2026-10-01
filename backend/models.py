@@ -6,10 +6,11 @@ from enum import StrEnum
 from hashlib import sha256
 from typing import TYPE_CHECKING, Any
 from uuid import UUID, uuid4
+from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 from argon2 import PasswordHasher
 from pydantic import field_validator
-from sqlalchemy import DateTime, Enum, Index, UniqueConstraint, text
+from sqlalchemy import BigInteger, DateTime, Enum, Index, Text, UniqueConstraint, text
 from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.sql.functions import now
 from sqlmodel import Field, SQLModel, col, or_
@@ -42,13 +43,8 @@ class JobKind(StrEnum):
     SESSION = "session"
     MEMORY_MERGE = "memory_merge"
     PROJECT_OVERVIEW = "project_overview"
-    PROJECT_SUGGESTION = "project_suggestion"
     NOTE_RELATIONS = "note_relations"
-
-
-class SuggestionKind(StrEnum):
-    MERGE = "merge"
-    NEST = "nest"
+    PROJECT_LINK = "project_link"
 
 
 class ProviderKind(StrEnum):
@@ -61,6 +57,11 @@ class ProjectInference(StrEnum):
     WORKTREE = "worktree"
     CWD = "cwd"
     SCRATCH = "scratch"
+
+
+def slugify_segment(value: str) -> str:
+    kept = "".join(char if char.isalnum() or char in "-_." else "-" for char in value.strip("/"))
+    return kept.strip("-").lower() or "unknown"
 
 
 def background_session(kind: JobKind, target: str = "") -> str:
@@ -150,6 +151,160 @@ class Job(UUIDMixin, TimestampMixin, JobBase, table=True):
     refined_at: datetime | None = Field(default=None, sa_type=DateTime(timezone=True))
 
 
+class PromptStage(StrEnum):
+    SESSION_EXPLORE = "session_explore"
+    SESSION_CHUNK = "session_chunk"
+    SESSION_FINAL = "session_final"
+    SESSION_VERIFY = "session_verify"
+    SESSION_SPLIT = "session_split"
+    PROJECT_OVERVIEW = "project_overview"
+    PROJECT_LINK = "project_link"
+    MEMORY_MERGE = "memory_merge"
+    NOTE_RELATIONS = "note_relations"
+
+
+class PromptStatus(StrEnum):
+    DRAFT = "draft"
+    ACTIVE = "active"
+    ARCHIVED = "archived"
+
+
+class PromptBase(SQLModel):
+    stage: PromptStage = Field(sa_type=enum_type(PromptStage))
+    label: str = ""
+    system: str = Field(sa_type=Text)
+    instruction: str = Field(default="", sa_type=Text)
+    thinking: bool = True
+    temperature: float = Field(default=0.2, ge=0.0, le=2.0)
+    max_tokens: int = Field(default=20000, ge=256)
+
+
+class Prompt(UUIDMixin, TimestampMixin, PromptBase, table=True):
+    __tablename__ = "prompt"
+    __table_args__ = (Index("ix_prompt_stage_status", "stage", "status"),)
+
+    status: PromptStatus = Field(default=PromptStatus.DRAFT, sa_type=enum_type(PromptStatus))
+    parent_id: UUID | None = Field(default=None, foreign_key="prompt.id", ondelete="SET NULL")
+
+
+class UploadKind(StrEnum):
+    TRANSCRIPT = "transcript"
+    GIT_BUNDLE = "git_bundle"
+    WORKTREE = "worktree"
+
+
+class RawTranscript(UUIDMixin, TimestampMixin, table=True):
+    __tablename__ = "raw_transcript"
+    __table_args__ = (UniqueConstraint("agent", "device", "session_id", name="uq_raw_transcript_session"),)
+
+    agent: str
+    device: str
+    session_id: str
+    project_hint: str = ""
+    cwd: str | None = None
+    byte_size: int = Field(default=0, sa_type=BigInteger)
+    digest: str = ""
+    started_at: datetime | None = Field(default=None, sa_type=DateTime(timezone=True))
+    ended_at: datetime | None = Field(default=None, sa_type=DateTime(timezone=True))
+
+    @property
+    def relative_path(self) -> str:
+        return f"transcripts/{slugify_segment(self.device)}/{slugify_segment(self.agent)}/{slugify_segment(self.session_id)}.jsonl"
+
+
+class Upload(UUIDMixin, TimestampMixin, table=True):
+    __tablename__ = "upload"
+
+    kind: UploadKind = Field(sa_type=enum_type(UploadKind))
+    byte_size: int = Field(default=0, sa_type=BigInteger)
+    part_count: int = 0
+    digest: str | None = None
+    completed_at: datetime | None = Field(default=None, sa_type=DateTime(timezone=True))
+
+    @property
+    def relative_path(self) -> str:
+        return f"uploads/{self.id}.part"
+
+
+class GitNetwork(UUIDMixin, TimestampMixin, table=True):
+    __tablename__ = "git_network"
+
+    roots: list[str] = Field(default_factory=list, sa_type=JSONB(none_as_null=True))
+    label: str = ""
+
+    @property
+    def relative_path(self) -> str:
+        return f"repos/{self.id}.git"
+
+
+class GitSource(UUIDMixin, TimestampMixin, table=True):
+    __tablename__ = "git_source"
+    __table_args__ = (UniqueConstraint("device", "path", name="uq_git_source_location"),)
+
+    network_id: UUID = Field(foreign_key="git_network.id", ondelete="CASCADE", index=True)
+    device: str
+    path: str
+    remote: str | None = None
+    refs: dict[str, str] = Field(default_factory=dict, sa_type=JSONB(none_as_null=True))
+    snapshot_ref: str | None = None
+
+    @property
+    def namespace(self) -> str:
+        return f"refs/sources/{slugify_segment(self.device)}-{slugify_segment(self.path)}"
+
+
+class ProjectEntry(UUIDMixin, TimestampMixin, table=True):
+    __tablename__ = "project_entry"
+
+    slug: str = Field(unique=True, index=True)
+    description: str = Field(default="", sa_type=Text)
+    sources: list[dict[str, str]] = Field(default_factory=list, sa_type=JSONB(none_as_null=True))
+    container: bool = Field(default=False)
+
+    @staticmethod
+    def covers(root: str, path: str) -> bool:
+        return bool(root) and (path == root or path.startswith(root.rstrip("/") + "/"))
+
+    def prefix_for(self, path: str) -> str:
+        for source in self.sources:
+            if self.covers(str(source.get("path") or ""), path):
+                return str(source.get("prefix") or "")
+        return ""
+
+
+class NoteVerdict(StrEnum):
+    HIDE = "hide"
+    PURGE = "purge"
+
+
+class NoteDecision(UUIDMixin, TimestampMixin, table=True):
+    __tablename__ = "note_decision"
+    __table_args__ = (UniqueConstraint("agent", "device", "session_id", name="uq_note_decision"),)
+
+    agent: str
+    device: str
+    session_id: str = Field(index=True)
+    verdict: NoteVerdict = Field(sa_type=enum_type(NoteVerdict))
+    reason: str = Field(default="", sa_type=Text)
+
+
+class NotePin(UUIDMixin, TimestampMixin, table=True):
+    __tablename__ = "note_pin"
+    __table_args__ = (UniqueConstraint("agent", "device", "session_id", "first_request", name="uq_note_pin"),)
+
+    agent: str
+    device: str
+    session_id: str = Field(index=True)
+    project: str = Field(index=True)
+    first_request: int = Field(default=0, ge=0)
+    last_request: int = Field(default=0, ge=0)
+
+    def holds(self, number: int) -> bool:
+        if self.first_request == 0:
+            return True
+        return self.first_request <= number <= (self.last_request or self.first_request)
+
+
 class ProjectAlias(UUIDMixin, TimestampMixin, table=True):
     __tablename__ = "project_alias"
 
@@ -157,17 +312,24 @@ class ProjectAlias(UUIDMixin, TimestampMixin, table=True):
     slug: str = Field(index=True)
 
 
-class ProjectSuggestion(UUIDMixin, TimestampMixin, table=True):
-    __tablename__ = "project_suggestion"
-    __table_args__ = (UniqueConstraint("kind", "source", "target", name="uq_project_suggestion"),)
+class LinkKind(StrEnum):
+    SAME = "same"
+    PART_OF = "part_of"
+    RELATED = "related"
 
-    kind: SuggestionKind = Field(sa_type=enum_type(SuggestionKind))
+
+class ProjectLink(UUIDMixin, TimestampMixin, table=True):
+    __tablename__ = "project_link"
+    __table_args__ = (UniqueConstraint("source", "target", name="uq_project_link_pair"),)
+
+    kind: LinkKind = Field(sa_type=enum_type(LinkKind))
     source: str = Field(index=True)
-    target: str
-    reason: str
+    target: str = Field(index=True)
+    description: str = Field(default="", sa_type=Text)
+    stated_by_user: str = Field(default="", sa_type=Text)
+    confirmed: bool = False
+    unrelated: bool = False
     summarizer: str = ""
-    applied_at: datetime | None = Field(default=None, sa_type=DateTime(timezone=True))
-    dismissed_at: datetime | None = Field(default=None, sa_type=DateTime(timezone=True))
 
 
 class RuntimeSettingBase(SQLModel):
@@ -187,6 +349,24 @@ class RuntimeSettingBase(SQLModel):
     overview_max_age_days: int = Field(default=7, ge=1)
     background_sweep_hours: int = Field(default=24, ge=1)
     background_batch_size: int = Field(default=3, ge=1)
+    display_timezone: str = Field(default="Asia/Seoul")
+    verify_max_claims: int = Field(default=12, ge=0)
+    rebuild_batch_size: int = Field(default=0, ge=0)
+    rebuild_max_age_days: int = Field(default=30, ge=1)
+
+    @field_validator("display_timezone")
+    @classmethod
+    def known_zone(cls, value: str) -> str:
+        try:
+            ZoneInfo(value)
+        except (ZoneInfoNotFoundError, ValueError) as error:
+            message = f"{value} is not a known time zone"
+            raise ValueError(message) from error
+        return value
+
+    @property
+    def zone(self) -> ZoneInfo:
+        return ZoneInfo(self.display_timezone)
 
 
 class RuntimeSetting(TimestampMixin, RuntimeSettingBase, table=True):

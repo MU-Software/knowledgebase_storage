@@ -2,7 +2,6 @@ export type NoteSummary = {
   path: string
   title: string
   project: string
-  project_path: string
   tags: string[]
   source: Record<string, unknown>
 }
@@ -10,26 +9,84 @@ export type NoteSummary = {
 export type NoteDetail = NoteSummary & { content: string }
 
 export type ProjectNode = {
-  path: string
   name: string
-  parent: string | null
-  depth: number
   note_count: number
-  total_note_count: number
-  child_count: number
   unconfirmed: boolean
   aliases: string[]
   overview: string | null
 }
 
-export type Suggestion = {
+export type PromptStage =
+  | 'session_explore'
+  | 'session_chunk'
+  | 'session_final'
+  | 'session_verify'
+  | 'session_split'
+  | 'project_overview'
+  | 'project_link'
+  | 'memory_merge'
+  | 'note_relations'
+
+export type Prompt = {
   id: string
-  kind: 'merge' | 'nest'
+  stage: PromptStage
+  status: 'draft' | 'active' | 'archived'
+  label: string
+  system: string
+  instruction: string
+  thinking: boolean
+  temperature: number
+  max_tokens: number
+  parent_id: string | null
+  created_at: string
+  updated_at: string
+}
+
+export type ProjectLink = {
+  id: string
+  kind: 'same' | 'part_of' | 'related'
   source: string
   target: string
-  reason: string
+  description: string
+  stated_by_user: string
+  confirmed: boolean
+  unrelated: boolean
   summarizer: string
   created_at: string
+}
+
+export type NoteForget = {
+  paths: string[]
+  verdict: 'hide' | 'purge'
+  reason: string
+}
+
+export type NoteForgotten = {
+  path: string
+  removed: boolean
+  raw_removed: boolean
+}
+
+export type NoteMove = {
+  path: string
+  project: string
+  first_request: number
+  last_request: number
+}
+
+export type NoteMoved = {
+  path: string
+  project: string
+  moved_to: string | null
+}
+
+export type ProjectEntry = {
+  id: string
+  slug: string
+  description: string
+  sources: { path: string; prefix: string }[]
+  container: boolean
+  updated_at: string
 }
 
 export type ProjectMergeResult = {
@@ -40,9 +97,8 @@ export type ProjectMergeResult = {
 }
 
 export type ProjectDeleteResult = {
-  path: string
+  project: string
   deleted_notes: number
-  deleted_projects: string[]
 }
 
 export type Job = {
@@ -176,17 +232,28 @@ export const api = {
   testProvider: (id: string) => send<ProviderTestResult>('POST', `/llm-providers/${id}/test`),
   projects: () => get<ProjectNode[]>('/wiki/projects'),
   mergeProjects: (payload: { source: string; target: string }) => send<ProjectMergeResult>('POST', '/wiki/projects/merge', payload),
-  reparentProject: ({ name, parent }: { name: string; parent: string | null }) =>
-    send<ProjectNode>('PATCH', `/wiki/projects/${encodeURIComponent(name)}`, { parent }),
   deleteProject: (name: string) => send<ProjectDeleteResult>('DELETE', `/wiki/projects/${encodeURIComponent(name)}`),
   requestOverview: (name: string) => send<Job | null>('POST', `/wiki/projects/${encodeURIComponent(name)}/overview`),
-  suggestions: () => get<Suggestion[]>('/wiki/suggestions'),
-  decideSuggestion: ({ id, applied, reverse = false }: { id: string; applied: boolean; reverse?: boolean }) =>
-    send<Suggestion>('POST', `/wiki/suggestions/${id}/${applied ? `apply?reverse=${reverse}` : 'dismiss'}`),
   notes: (project?: string) => get<NoteSummary[]>(`/wiki/notes${project ? `?project=${encodeURIComponent(project)}` : ''}`),
+  forgetNotes: (payload: NoteForget) => send<NoteForgotten[]>('POST', '/wiki/notes/forget', payload),
+  moveNote: (payload: NoteMove) => send<NoteMoved>('POST', '/wiki/notes/move', payload),
   note: (path: string) => get<NoteDetail>(`/wiki/notes/${path}`),
   search: (q: string) => get<NoteSummary[]>(`/wiki/search?q=${encodeURIComponent(q)}`),
   jobs: ({ offset, limit }: { offset: number; limit: number }) => get<JobPage>(`/jobs?offset=${offset}&limit=${limit}`),
+  prompts: () => get<Prompt[]>('/prompts'),
+  draftPrompt: (payload: Omit<Prompt, 'id' | 'status' | 'parent_id' | 'created_at' | 'updated_at'>) => send<Prompt>('POST', '/prompts', payload),
+  amendPrompt: ({ id, patch }: { id: string; patch: Partial<Prompt> }) => send<Prompt>('PATCH', `/prompts/${id}`, patch),
+  activatePrompt: (id: string) => send<Prompt>('POST', `/prompts/${id}/activate`),
+  links: () => get<ProjectLink[]>('/wiki/links'),
+  writeLink: (payload: Partial<ProjectLink>) => send<ProjectLink>('PUT', '/wiki/links', payload),
+  applyLink: ({ source, target, reverse = false }: { source: string; target: string; reverse?: boolean }) =>
+    send<ProjectLink>('POST', `/wiki/links/apply?source=${encodeURIComponent(source)}&target=${encodeURIComponent(target)}&reverse=${reverse}`),
+  dropLink: ({ source, target }: { source: string; target: string }) =>
+    send<void>('DELETE', `/wiki/links?source=${encodeURIComponent(source)}&target=${encodeURIComponent(target)}`),
+  entries: () => get<ProjectEntry[]>('/wiki/entries'),
+  writeEntry: (payload: Omit<ProjectEntry, 'id' | 'updated_at'>) => send<ProjectEntry>('PUT', '/wiki/entries', payload),
+  rebuild: (payload: { device?: string; project?: string; limit?: number; offset?: number }) =>
+    send<string[]>('POST', `/raw/rebuild?${new URLSearchParams(Object.entries(payload).map(([k, v]) => [k, String(v)])).toString()}`),
 }
 
 export type User = {
@@ -223,6 +290,10 @@ export type RuntimeSetting = {
   overview_max_age_days: number
   background_sweep_hours: number
   background_batch_size: number
+  display_timezone: string
+  verify_max_claims: number
+  rebuild_batch_size: number
+  rebuild_max_age_days: number
   updated_at: string
 }
 

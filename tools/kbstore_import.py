@@ -9,12 +9,15 @@ from __future__ import annotations
 
 import argparse
 import functools
+import hashlib
 import json
 import os
 import subprocess
 import sys
 import tarfile
+import tempfile
 import urllib.error
+import urllib.parse
 import urllib.request
 import zipfile
 from collections.abc import Callable, Iterator
@@ -23,7 +26,17 @@ from pathlib import Path, PurePosixPath
 
 TEXT_BLOCK_TYPES = {"text", "input_text", "output_text"}
 NON_PROJECT_DIRS = {Path.home(), Path("/tmp"), Path("/var/tmp"), Path("/")}  # noqa: S108
+SCRATCH_PARENTS = (Path.home() / "Documents" / "Codex", Path.home() / "Downloads", Path.home() / "Desktop")
 CODEX_SESSION_PATTERNS = ("sessions/*/*/*/*.jsonl", "archived_sessions/*.jsonl")
+CHUNK_BYTES = 16 << 20
+BLOB_LIMIT = "2m"
+
+
+def path_is_scratch(cwd: Path) -> bool:
+    here = cwd.resolve()
+    if here in NON_PROJECT_DIRS:
+        return True
+    return any(here == parent or parent in here.parents for parent in SCRATCH_PARENTS)
 
 
 @dataclass
@@ -171,14 +184,16 @@ def _git(cwd: Path, *args: str) -> str | None:
 @functools.cache
 def project_of(cwd: str | None) -> tuple[str, str]:
     path = Path(cwd) if cwd else None
-    if path is not None and path.is_dir():
+    if path is None:
+        return "unfiled", "cwd"
+    if path.is_dir():
         if remote := _git(path, "remote", "get-url", "origin"):
             return remote.rstrip("/").rsplit("/", 1)[-1].removesuffix(".git"), "remote"
         if toplevel := _git(path, "rev-parse", "--show-toplevel"):
             return Path(toplevel).name, "worktree"
-        if path.resolve() in NON_PROJECT_DIRS:
-            return "_scratch", "scratch"
-    return (PurePosixPath(cwd).name if cwd else "") or "unfiled", "cwd"
+    if path_is_scratch(path):
+        return "_scratch", "scratch"
+    return PurePosixPath(cwd).name or "unfiled", "cwd"
 
 
 class Client:
@@ -186,6 +201,58 @@ class Client:
         self.base = base.rstrip("/")
         self.api_key = api_key
         self.dry_run = dry_run
+
+    def send_bytes(self, method: str, path: str, payload: bytes, content_type: str) -> dict | None:
+        if self.dry_run:
+            return {}
+        request = urllib.request.Request(
+            f"{self.base}{path}",
+            data=payload,
+            headers={"Content-Type": content_type, **({"X-API-Key": self.api_key} if self.api_key else {})},
+            method=method,
+        )
+        try:
+            with urllib.request.urlopen(request, timeout=600) as response:
+                return json.loads(response.read())
+        except urllib.error.HTTPError as error:
+            sys.stderr.write(f"  ! {method} {path} -> {error.code} {error.read().decode()[:160]}\n")
+            return None
+        except (OSError, ValueError) as error:
+            sys.stderr.write(f"  ! {method} {path} -> {error}\n")
+            return None
+
+    def upload(self, kind: str, payload: bytes) -> str | None:
+        started = self.read_post(f"/api/raw/uploads?kind={kind}")
+        if not isinstance(started, dict) or self.dry_run:
+            return "dry-run" if self.dry_run else None
+        upload_id, offset = started["id"], 0
+        while offset < len(payload):
+            block = payload[offset : offset + CHUNK_BYTES]
+            if self.send_bytes("PUT", f"/api/raw/uploads/{upload_id}?offset={offset}", block, "application/octet-stream") is None:
+                return None
+            offset += len(block)
+        digest = hashlib.sha256(payload).hexdigest()
+        done = self.read_post(f"/api/raw/uploads/{upload_id}/complete?digest={digest}")
+        return upload_id if done is not None else None
+
+    def read_post(self, path: str, payload: dict | None = None) -> dict | None:
+        if self.dry_run:
+            return {}
+        request = urllib.request.Request(
+            f"{self.base}{path}",
+            data=json.dumps(payload, ensure_ascii=False).encode() if payload is not None else b"",
+            headers={"Content-Type": "application/json", **({"X-API-Key": self.api_key} if self.api_key else {})},
+            method="POST",
+        )
+        try:
+            with urllib.request.urlopen(request, timeout=600) as response:
+                return json.loads(response.read())
+        except urllib.error.HTTPError as error:
+            sys.stderr.write(f"  ! POST {path} -> {error.code} {error.read().decode()[:160]}\n")
+            return None
+        except (OSError, ValueError) as error:
+            sys.stderr.write(f"  ! POST {path} -> {error}\n")
+            return None
 
     def send(self, method: str, path: str, payload: dict) -> int:
         if self.dry_run:
@@ -252,6 +319,68 @@ def import_sessions(source: Source, client: Client, plan: Plan) -> tuple[int, in
     return sent, skipped, chars
 
 
+def import_raw(source: Source, client: Client, plan: Plan) -> tuple[int, int, int]:
+    sent = skipped = megabytes = 0
+    for name in source.glob(plan.pattern):
+        session = plan.reader(source, name)
+        if session is None or session.text_length < plan.min_chars:
+            skipped += 1
+            continue
+        payload = source.read(name)
+        query = urllib.parse.urlencode(
+            {
+                "agent": session.agent,
+                "device": plan.device,
+                "session_id": session.session_id,
+                "project": project_of(session.cwd)[0],
+                "cwd": session.cwd or "",
+                "offset": 0,
+            }
+        )
+        if client.send_bytes("PUT", f"/api/raw/transcripts?{query}", payload, "application/x-ndjson") is None:
+            skipped += 1
+            continue
+        sent += 1
+        megabytes += len(payload)
+    return sent, skipped, megabytes
+
+
+def import_git(client: Client, device: str, directories: set[str]) -> tuple[int, int]:
+    sent = skipped = 0
+    for directory in sorted(directories):
+        repo = Path(directory)
+        if not repo.is_dir() or not _git(repo, "rev-parse", "--show-toplevel"):
+            continue
+        toplevel = Path(_git(repo, "rev-parse", "--show-toplevel") or directory)
+        bundle = Path(tempfile.gettempdir()) / f"kbstore-{abs(hash(toplevel.as_posix()))}.bundle"
+        bundle.unlink(missing_ok=True)
+        made = subprocess.run(  # noqa: S603
+            ["git", "bundle", "create", bundle.as_posix(), f"--filter=blob:limit={BLOB_LIMIT}", "--branches", "--tags", "HEAD"],  # noqa: S607
+            cwd=toplevel,
+            capture_output=True,
+            text=True,
+            check=False,
+        )
+        if made.returncode != 0 or not bundle.is_file():
+            sys.stderr.write(f"  ! bundle {toplevel} -> {made.stderr.strip()[:160]}\n")
+            skipped += 1
+            continue
+        upload = client.upload("git_bundle", bundle.read_bytes())
+        body = {
+            "upload_id": upload,
+            "device": device,
+            "path": toplevel.as_posix(),
+            "remote": _git(toplevel, "remote", "get-url", "origin"),
+            "roots": (_git(toplevel, "rev-list", "--max-parents=0", "--all") or "").split(),
+        }
+        if upload and (client.dry_run or client.read_post("/api/git/sources", body) is not None):
+            sent += 1
+        else:
+            skipped += 1
+        bundle.unlink(missing_ok=True)
+    return sent, skipped
+
+
 def map_projects(source: Source) -> dict[str, str]:
     """Recover each Claude project folder's working directory from a session's cwd."""
     mapping: dict[str, str] = {}
@@ -274,6 +403,8 @@ def main() -> int:
     parser.add_argument("--claude", type=Path, help="~/.claude directory or an archive of it")
     parser.add_argument("--codex", type=Path, help="~/.codex directory or an archive of it")
     parser.add_argument("--min-chars", type=int, default=200, help="skip sessions with less conversation than this")
+    parser.add_argument("--raw", action="store_true", help="upload the original transcript files, not only parsed conversations")
+    parser.add_argument("--git", action="store_true", help="upload each project's git history as a filtered bundle")
     parser.add_argument("--dry-run", action="store_true")
     args = parser.parse_args()
 
@@ -284,22 +415,39 @@ def main() -> int:
     mode = "DRY RUN" if args.dry_run else f"-> {args.api_base}"
     print(f"device={args.device}  {mode}")
 
+    directories: set[str] = set()
+
     if args.claude:
         source = Source.open(args.claude)
         projects = map_projects(source)
         sent, skipped = import_memories(source, client, args.device, projects)
         print(f"  claude memories : {sent} sent, {skipped} skipped")
         plan = Plan(args.device, "projects/*/*.jsonl", read_claude_session, min_chars=args.min_chars)
+        if args.raw:
+            sent, skipped, size = import_raw(source, client, plan)
+            print(f"  claude raw      : {sent} sent, {skipped} skipped, {size / 1048576:.0f} MB")
         sent, skipped, chars = import_sessions(source, client, plan)
         print(f"  claude sessions : {sent} sent, {skipped} skipped, {chars / 1024:.0f} KB text (~{chars / 2000:.0f}k tokens)")
+        directories |= {cwd for cwd in projects.values() if cwd}
 
     if args.codex:
         source = Source.open(args.codex)
         for pattern in CODEX_SESSION_PATTERNS:
             plan = Plan(args.device, pattern, read_codex_session, min_chars=args.min_chars)
+            if args.raw:
+                sent, skipped, size = import_raw(source, client, plan)
+                print(f"  codex {PurePosixPath(pattern).parts[0]} raw : {sent} sent, {skipped} skipped, {size / 1048576:.0f} MB")
             sent, skipped, chars = import_sessions(source, client, plan)
             label = PurePosixPath(pattern).parts[0]
             print(f"  codex {label} : {sent} sent, {skipped} skipped, {chars / 1024:.0f} KB text (~{chars / 2000:.0f}k tokens)")
+            for name in source.glob(pattern):
+                session = plan.reader(source, name)
+                if session is not None and session.cwd:
+                    directories.add(session.cwd)
+
+    if args.git:
+        sent, skipped = import_git(client, args.device, directories)
+        print(f"  git bundles     : {sent} sent, {skipped} skipped")
 
     return 0
 

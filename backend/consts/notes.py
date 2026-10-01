@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import re
-from itertools import takewhile
 
 PROJECTS_ROOT = "projects"
 LOG_DIR = "log"
@@ -12,6 +11,7 @@ OVERVIEW_FILE = "overview.md"
 UNFILED = "_unfiled"
 
 _UNSAFE = re.compile(r"[^\w.-]+", re.UNICODE)
+_FILENAME = re.compile(r"\.(pdf|md|txt|png|jpe?g|gif|svg|csv|xlsx?|docx?|zip|html?|json|ya?ml)$", re.IGNORECASE)
 
 
 def slugify(value: str) -> str:
@@ -19,24 +19,15 @@ def slugify(value: str) -> str:
     return f"{slug}-project" if slug in RESERVED_SEGMENTS else slug
 
 
-def project_segments(relative_path: str) -> list[str]:
+def named_project(value: str) -> str:
+    name = value.strip()
+    if not name or "://" in name or name.startswith(("http", "/", "~", ".")) or "/" in name or "\\" in name:
+        return UNFILED
+    return UNFILED if _FILENAME.search(name) else name
+
+
+def project_of(relative_path: str) -> str:
     parts = relative_path.split("/")
-    if parts[0] != PROJECTS_ROOT:
-        return []
-    return list(takewhile(lambda segment: segment not in RESERVED_SEGMENTS, parts[1:-1]))
-
-
-def parent_of(project_path: str) -> str | None:
-    head, _, _ = project_path.rpartition("/")
-    return head or None
-
-
-def ancestors_of(project_path: str) -> list[str]:
-    found = []
-    while (project_path := parent_of(project_path) or "") != "":
-        found.append(project_path)
-    return found
-
-
-def is_within(project_path: str, ancestor: str) -> bool:
-    return project_path == ancestor or project_path.startswith(f"{ancestor}/")
+    if parts[0] != PROJECTS_ROOT or len(parts) < 3 or parts[1] in RESERVED_SEGMENTS:  # noqa: PLR2004
+        return UNFILED
+    return parts[1]

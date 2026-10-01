@@ -51,34 +51,41 @@ const useProjectMutation = <TArgs, TResult>(mutationFn: (args: TArgs) => Promise
       client.invalidateQueries({ queryKey: ['projects'] })
       client.invalidateQueries({ queryKey: ['notes'] })
       client.invalidateQueries({ queryKey: ['jobs'] })
-      client.invalidateQueries({ queryKey: ['suggestions'] })
     },
   })
 }
 
 export const useMergeProjects = () => useProjectMutation(api.mergeProjects)
 
-export const useReparentProject = () => useProjectMutation(api.reparentProject)
-
 export const useDeleteProject = () => useProjectMutation(api.deleteProject)
 
 export const useRequestOverview = () => useProjectMutation(api.requestOverview)
 
-export const useSuggestions = () => useSuspenseQuery({ queryKey: ['suggestions'], queryFn: api.suggestions })
+export const useNotes = (project?: string) => useSuspenseQuery({ queryKey: ['notes', project], queryFn: () => api.notes(project) })
 
-export const useDecideSuggestion = () => {
+export const useForgetNotes = () => {
   const client = useQueryClient()
   return useMutation({
-    mutationFn: api.decideSuggestion,
+    mutationFn: api.forgetNotes,
     onSuccess: () => {
-      client.invalidateQueries({ queryKey: ['suggestions'] })
-      client.invalidateQueries({ queryKey: ['projects'] })
       client.invalidateQueries({ queryKey: ['notes'] })
+      client.invalidateQueries({ queryKey: ['projects'] })
+      client.invalidateQueries({ queryKey: ['jobs'] })
     },
   })
 }
 
-export const useNotes = (project?: string) => useSuspenseQuery({ queryKey: ['notes', project], queryFn: () => api.notes(project) })
+export const useMoveNote = () => {
+  const client = useQueryClient()
+  return useMutation({
+    mutationFn: api.moveNote,
+    onSuccess: () => {
+      client.invalidateQueries({ queryKey: ['notes'] })
+      client.invalidateQueries({ queryKey: ['note'] })
+      client.invalidateQueries({ queryKey: ['projects'] })
+    },
+  })
+}
 
 export const useNote = (path: string) => useSuspenseQuery({ queryKey: ['note', path], queryFn: () => api.note(path) })
 
@@ -114,5 +121,64 @@ export const useDeleteProvider = () => {
   return useMutation({
     mutationFn: api.deleteProvider,
     onSuccess: () => client.invalidateQueries({ queryKey: ['providers'] }),
+  })
+}
+
+export const usePrompts = () => useSuspenseQuery({ queryKey: ['prompts'], queryFn: api.prompts })
+
+const usePromptMutation = <T, R>(fn: (input: T) => Promise<R>) => {
+  const client = useQueryClient()
+  return useMutation({
+    mutationFn: fn,
+    onSuccess: () => client.invalidateQueries({ queryKey: ['prompts'] }),
+  })
+}
+
+export const useDraftPrompt = () => usePromptMutation(api.draftPrompt)
+
+export const useAmendPrompt = () => usePromptMutation(api.amendPrompt)
+
+export const useActivatePrompt = () => usePromptMutation(api.activatePrompt)
+
+export const useLinks = () => useSuspenseQuery({ queryKey: ['links'], queryFn: api.links })
+
+const useLinkMutation = <T, R>(fn: (input: T) => Promise<R>) => {
+  const client = useQueryClient()
+  return useMutation({
+    mutationFn: fn,
+    onSuccess: () => client.invalidateQueries({ queryKey: ['links'] }),
+  })
+}
+
+export const useWriteLink = () => useLinkMutation(api.writeLink)
+
+export const useApplyLink = () => {
+  const client = useQueryClient()
+  return useMutation({
+    mutationFn: api.applyLink,
+    onSuccess: () => {
+      void client.invalidateQueries({ queryKey: ['links'] })
+      void client.invalidateQueries({ queryKey: ['projects'] })
+    },
+  })
+}
+
+export const useDropLink = () => useLinkMutation(api.dropLink)
+
+export const useEntries = () => useSuspenseQuery({ queryKey: ['entries'], queryFn: api.entries })
+
+export const useWriteEntry = () => {
+  const client = useQueryClient()
+  return useMutation({
+    mutationFn: api.writeEntry,
+    onSuccess: () => client.invalidateQueries({ queryKey: ['entries'] }),
+  })
+}
+
+export const useRebuild = () => {
+  const client = useQueryClient()
+  return useMutation({
+    mutationFn: api.rebuild,
+    onSuccess: () => client.invalidateQueries({ queryKey: ['jobs'] }),
   })
 }

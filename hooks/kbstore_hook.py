@@ -21,13 +21,26 @@ if TYPE_CHECKING:
 API_BASE = os.environ.get("KBSTORE_API_BASE", "http://127.0.0.1:8006")
 API_KEY = os.environ.get("KBSTORE_API_KEY")
 TIMEOUT_SECONDS = float(os.environ.get("KBSTORE_TIMEOUT", "3"))
+UPLOAD_TIMEOUT_SECONDS = float(os.environ.get("KBSTORE_UPLOAD_TIMEOUT", "60"))
+BUNDLE_TIMEOUT_SECONDS = float(os.environ.get("KBSTORE_BUNDLE_TIMEOUT", "30"))
+BLOB_LIMIT = os.environ.get("KBSTORE_BLOB_LIMIT", "2m")
+CHUNK_BYTES = int(os.environ.get("KBSTORE_CHUNK_BYTES", str(16 << 20)))
+FIRST_PUSH_LIMIT_KB = int(os.environ.get("KBSTORE_FIRST_PUSH_LIMIT_KB", str(200 << 10)))
 MAX_MESSAGES = int(os.environ.get("KBSTORE_MAX_MESSAGES", "2000"))
 STATE_DIR = Path(os.environ.get("KBSTORE_STATE_DIR") or Path.home() / ".cache" / "kbstore")
 
 NON_PROJECT_DIRS = {Path.home(), Path("/tmp"), Path("/var/tmp"), Path("/")}  # noqa: S108
+SCRATCH_PARENTS = (Path.home() / "Documents" / "Codex", Path.home() / "Downloads", Path.home() / "Desktop")
 TEXT_BLOCK_TYPES = {"text", "input_text", "output_text"}
 ROLES = {"user", "assistant"}
 HOOK_ERRORS = (OSError, ValueError, KeyError, TypeError)
+
+
+def path_is_scratch(cwd: Path) -> bool:
+    here = cwd.resolve()
+    if here in NON_PROJECT_DIRS:
+        return True
+    return any(here == parent or parent in here.parents for parent in SCRATCH_PARENTS)
 
 
 def _git(cwd: Path, *args: str) -> str | None:
@@ -53,7 +66,7 @@ def infer_project(cwd: Path) -> tuple[str, str]:
     if toplevel := _git(cwd, "rev-parse", "--show-toplevel"):
         return Path(toplevel).name, "worktree"
 
-    if cwd.resolve() in NON_PROJECT_DIRS:
+    if path_is_scratch(cwd):
         return "_scratch", "scratch"
 
     return cwd.name, "cwd"
@@ -125,6 +138,175 @@ def call(method: str, path: str, payload: dict | None = None) -> object | None:
             return json.loads(response.read())
     except (urllib.error.URLError, OSError, TimeoutError, ValueError):
         return None
+
+
+def send_bytes(method: str, path: str, payload: bytes, content_type: str) -> object | None:
+    request = urllib.request.Request(  # noqa: S310
+        f"{API_BASE}{path}",
+        data=payload,
+        headers={"Content-Type": content_type, **({"X-API-Key": API_KEY} if API_KEY else {})},
+        method=method,
+    )
+    try:
+        with urllib.request.urlopen(request, timeout=UPLOAD_TIMEOUT_SECONDS) as response:  # noqa: S310
+            return json.loads(response.read())
+    except (urllib.error.URLError, OSError, TimeoutError, ValueError):
+        return None
+
+
+def transcript_query(fields: dict[str, str], extra: dict[str, object] | None = None) -> str:
+    query = {
+        "agent": fields["agent"],
+        "device": fields["device"],
+        "session_id": fields["session_id"],
+        "project": fields["project"],
+        "cwd": fields.get("cwd") or "",
+        **(extra or {}),
+    }
+    return urllib.parse.urlencode({key: value for key, value in query.items() if value != ""})
+
+
+def push_transcript(fields: dict[str, str], transcript: Path) -> None:
+    held = call("GET", f"/api/raw/transcripts?{transcript_query(fields)}")
+    offset = int(held.get("byte_size", 0)) if isinstance(held, dict) else 0
+    size = transcript.stat().st_size
+    if size == offset:
+        return
+    with transcript.open("rb") as handle:
+        handle.seek(min(offset, size))
+        payload = handle.read()
+
+    if size < offset:
+        offset, payload = 0, transcript.read_bytes()
+    query = transcript_query(fields, {"offset": offset})
+    if send_bytes("PUT", f"/api/raw/transcripts?{query}", payload, "application/x-ndjson") is None and offset:
+        send_bytes("PUT", f"/api/raw/transcripts?{transcript_query(fields, {'offset': 0})}", transcript.read_bytes(), "application/x-ndjson")
+
+
+def upload_file(path: Path, kind: str) -> str | None:
+    started = call("POST", f"/api/raw/uploads?kind={kind}")
+    if not isinstance(started, dict):
+        return None
+    upload_id, offset = started["id"], 0
+    with path.open("rb") as handle:
+        while block := handle.read(CHUNK_BYTES):
+            if send_bytes("PUT", f"/api/raw/uploads/{upload_id}?offset={offset}", block, "application/octet-stream") is None:
+                return None
+            offset += len(block)
+    digest = hashlib.sha256(path.read_bytes()).hexdigest() if path.stat().st_size <= CHUNK_BYTES else ""
+    query = urllib.parse.urlencode({"digest": digest}) if digest else ""
+    return upload_id if call("POST", f"/api/raw/uploads/{upload_id}/complete?{query}") is not None else None
+
+
+def bundle_of(cwd: Path, name: str, revisions: list[str]) -> Path | None:
+    target = STATE_DIR / "bundles" / f"{name}.bundle"
+    target.parent.mkdir(parents=True, exist_ok=True)
+    target.unlink(missing_ok=True)
+    try:
+        done = subprocess.run(  # noqa: S603
+            ["git", "bundle", "create", target.as_posix(), f"--filter=blob:limit={BLOB_LIMIT}", *revisions],  # noqa: S607
+            cwd=cwd,
+            capture_output=True,
+            text=True,
+            timeout=BUNDLE_TIMEOUT_SECONDS,
+            check=False,
+        )
+    except (OSError, subprocess.SubprocessError):
+        return None
+    return target if done.returncode == 0 and target.is_file() and target.stat().st_size else None
+
+
+def small_enough(repo: Path) -> bool:
+    counted = _git(repo, "count-objects", "-v") or ""
+    sizes = dict(line.split(": ", 1) for line in counted.splitlines() if ": " in line)
+    try:
+        total = int(sizes.get("size-pack", "0")) + int(sizes.get("size", "0"))
+    except ValueError:
+        return False
+    return total <= FIRST_PUSH_LIMIT_KB
+
+
+def push_git(fields: dict[str, str], cwd: Path) -> None:
+    toplevel = _git(cwd, "rev-parse", "--show-toplevel")
+    if toplevel is None:
+        return
+    repo = Path(toplevel)
+    known = call("GET", "/api/git/sources?" + urllib.parse.urlencode({"device": fields["device"], "path": repo.as_posix()}))
+    if not isinstance(known, dict) and not small_enough(repo):
+        return
+
+    every = sorted(set(known.get("refs", {}).values())) if isinstance(known, dict) else []
+    tips = [tip for tip in every if run_git(repo, "cat-file", "-e", f"{tip}^{{commit}}")[0]]
+    heads = (_git(repo, "rev-parse", "--branches", "--tags", "HEAD") or "").split()
+    if any(head not in tips for head in heads):
+        revisions = ["--branches", "--tags", "HEAD", *[f"^{tip}" for tip in tips]]
+        if (bundle := bundle_of(repo, "history", revisions)) and (upload := upload_file(bundle, "git_bundle")):
+            call(
+                "POST",
+                "/api/git/sources",
+                {
+                    "upload_id": upload,
+                    "device": fields["device"],
+                    "path": repo.as_posix(),
+                    "remote": _git(repo, "remote", "get-url", "origin"),
+                    "roots": (_git(repo, "rev-list", "--max-parents=0", "--all") or "").split(),
+                },
+            )
+    push_snapshot(fields, repo)
+
+
+def run_git(repo: Path, *args: str, environment: dict[str, str] | None = None) -> tuple[bool, str]:
+    try:
+        done = subprocess.run(  # noqa: S603
+            ["git", *args],  # noqa: S607
+            cwd=repo,
+            env=environment,
+            capture_output=True,
+            text=True,
+            timeout=BUNDLE_TIMEOUT_SECONDS,
+            check=False,
+        )
+    except (OSError, subprocess.SubprocessError):
+        return False, ""
+    return done.returncode == 0, done.stdout.strip()
+
+
+def push_snapshot(fields: dict[str, str], repo: Path) -> None:
+    listed, dirty = run_git(repo, "status", "--porcelain")
+    if not listed or not dirty:
+        return
+    index = STATE_DIR / "snapshot-index"
+    index.parent.mkdir(parents=True, exist_ok=True)
+    index.unlink(missing_ok=True)
+    environment = {**os.environ, "GIT_INDEX_FILE": index.as_posix()}
+    for args in (("read-tree", "HEAD"), ("add", "-A")):
+        if not run_git(repo, *args, environment=environment)[0]:
+            return
+    written, tree = run_git(repo, "write-tree", environment=environment)
+    if not written:
+        return
+    marker = STATE_DIR / "snapshots" / f"{slug_of(repo.as_posix())}.txt"
+    if marker.is_file() and marker.read_text(encoding="utf-8").strip() == tree:
+        return
+    made, commit = run_git(repo, "commit-tree", tree, "-p", "HEAD", "-m", "kbstore worktree snapshot", environment=environment)
+    if not made:
+        return
+
+    reference = f"refs/kbstore/snapshot/{slug_of(fields['device'])}"
+    if not run_git(repo, "update-ref", reference, commit)[0]:
+        return
+    bundle = bundle_of(repo, "snapshot", [f"HEAD..{reference}"])
+    upload = upload_file(bundle, "worktree") if bundle else None
+    body = {"upload_id": upload, "device": fields["device"], "path": repo.as_posix(), "snapshot": True}
+    if upload and call("POST", "/api/git/sources", body) is not None:
+        marker.parent.mkdir(parents=True, exist_ok=True)
+        marker.write_text(tree, encoding="utf-8")
+    run_git(repo, "update-ref", "-d", reference)
+
+
+def slug_of(value: str) -> str:
+    kept = "".join(char if char.isalnum() or char in "-_" else "-" for char in value)
+    return kept.strip("-").lower() or "unknown"
 
 
 def digest(text: str) -> str:
@@ -214,11 +396,13 @@ def capture(payload: dict, transcript: Path, cwd: Path) -> dict[str, str] | None
         "agent": os.environ.get("KBSTORE_AGENT") or agent,
         "device": os.environ.get("KBSTORE_DEVICE") or socket.gethostname(),
         "project": project,
-    }
-    job = {
-        **fields,
-        "model": payload.get("model") or os.environ.get("KBSTORE_MODEL"),
         "session_id": thread_id or payload.get("session_id") or "unknown",
+        "cwd": cwd.as_posix(),
+    }
+    push_transcript(fields, transcript)
+    job = {
+        **{key: value for key, value in fields.items() if key != "cwd"},
+        "model": payload.get("model") or os.environ.get("KBSTORE_MODEL"),
         "project_inference": inference,
         "cwd": cwd.as_posix(),
         "transcript": messages,
@@ -242,8 +426,11 @@ def main() -> int:
             if context := start_session(payload, cwd, memory_dir):
                 output = {"hookSpecificOutput": {"hookEventName": "SessionStart", "additionalContext": context}}
                 sys.stdout.write(json.dumps(output, ensure_ascii=False))
-        elif transcript is not None and (fields := capture(payload, transcript, cwd)) is not None and memory_dir is not None:
-            push_memories(memory_dir, fields)
+        elif transcript is not None and (fields := capture(payload, transcript, cwd)) is not None:
+            if memory_dir is not None:
+                push_memories(memory_dir, fields)
+            with contextlib.suppress(*HOOK_ERRORS):
+                push_git(fields, cwd)
     return 0
 
 

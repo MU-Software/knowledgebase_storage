@@ -24,7 +24,11 @@ It reads both Claude Code and Codex transcripts.
 }
 ```
 
-`Stop` sends the conversation and uploads changed memory files.
+`Stop` appends the transcript's new bytes to the server, sends the conversation, uploads changed memory
+files, and — in a git repository — uploads the commits the server does not have yet plus a snapshot of
+uncommitted work. A repository the server has never seen is uploaded whole only when it is small; use
+`tools/kbstore_import.py --git` for the rest.
+
 `SessionStart` downloads the project's memory and adds the project's recent kb records to the context.
 
 ## Codex
@@ -41,9 +45,14 @@ The server keeps the latest snapshot of a session and summarizes it after `job_i
 | `KBSTORE_API_KEY` | | API key sent as `X-API-Key` on every request |
 | `KBSTORE_AGENT` | detected from the transcript | |
 | `KBSTORE_DEVICE` | hostname | |
-| `KBSTORE_TIMEOUT` | `3` | Seconds per request. Short, so the hook never holds the session |
+| `KBSTORE_TIMEOUT` | `3` | Seconds per small request. Short, so the hook never holds the session |
+| `KBSTORE_UPLOAD_TIMEOUT` | `60` | Seconds per upload request |
+| `KBSTORE_BUNDLE_TIMEOUT` | `30` | Seconds allowed for each git command |
+| `KBSTORE_BLOB_LIMIT` | `2m` | Files larger than this are left out of the bundle |
+| `KBSTORE_CHUNK_BYTES` | `16777216` | Upload chunk size |
+| `KBSTORE_FIRST_PUSH_LIMIT_KB` | `204800` | Skip the first git upload above this repository size |
 | `KBSTORE_MAX_MESSAGES` | `2000` | Send only the last N messages |
-| `KBSTORE_STATE_DIR` | `~/.cache/kbstore` | Remembers the memory files last synced |
+| `KBSTORE_STATE_DIR` | `~/.cache/kbstore` | Remembers synced memory files, bundles and the last snapshot tree |
 
 ## Rules
 

@@ -2,6 +2,7 @@ __pycache__/
 *.py[cod]
 .venv/
 .notes/
+.storage/
 .env
 dotenv/.env.*
 !dotenv/.env.example

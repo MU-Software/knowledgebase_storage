@@ -21,6 +21,11 @@ def get_notes_dir() -> Path:
     return get_settings().notes_dir
 
 
+def get_storage_dir() -> Path:
+    return get_settings().storage_dir
+
+
 dbDI = Annotated[AsyncSession, Depends(get_session)]  # noqa: N816
 settingsDI = Annotated[ProjectSetting, Depends(get_settings)]  # noqa: N816
 notesDirDI = Annotated[Path, Depends(get_notes_dir)]  # noqa: N816
+storageDirDI = Annotated[Path, Depends(get_storage_dir)]  # noqa: N816

@@ -5,15 +5,28 @@ from typing import TYPE_CHECKING, Annotated, Any, Literal, Self
 from uuid import UUID
 
 import frontmatter
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, field_validator
 
-from backend.consts.notes import UNFILED, project_segments
-from backend.models import MIN_CONTEXT_TOKENS, JobBase, JobKind, JobStatus, LLMProviderBase, ProviderKind, RuntimeSettingBase, SuggestionKind
+from backend.consts.notes import project_of
+from backend.models import (
+    MIN_CONTEXT_TOKENS,
+    JobBase,
+    JobKind,
+    JobStatus,
+    LinkKind,
+    LLMProviderBase,
+    NoteVerdict,
+    PromptBase,
+    PromptStatus,
+    ProviderKind,
+    RuntimeSettingBase,
+    UploadKind,
+)
 
 if TYPE_CHECKING:
     from pathlib import Path
 
-ObservationCategory = Literal["decision", "problem", "next", "fact", "idea"]
+ObservationCategory = Literal["decision", "problem", "next", "change", "fact", "idea"]
 MemoryFileName = Annotated[str, Field(pattern=r"^[^/\\]+\.md$")]
 ProjectName = Annotated[str, Field(min_length=1, max_length=200)]
 
@@ -37,27 +50,109 @@ class SummaryResult(BaseModel):
     tags: list[str] = Field(default_factory=list)
 
 
-class SuggestedLink(BaseModel):
-    kind: SuggestionKind = Field(description="merge when the two are the same work, nest when one belongs under the other")
-    source: str = Field(description="name of the project that is absorbed or moves")
-    target: str = Field(description="name of the project it joins")
-    reason: str = Field(description="One sentence on what makes them the same work.")
+class LinkCandidate(BaseModel):
+    project: str = Field(description="a name copied exactly from the known projects list")
+    relation: Literal["same", "part_of", "related"]
+    description: str = Field(description="One sentence on how this session's project and that project connect.")
+    quote: str = Field(description="The words in the log that state it, copied verbatim.")
 
 
-class ProjectSuggestions(BaseModel):
-    suggestions: list[SuggestedLink] = Field(default_factory=list)
+class SessionItem(BaseModel):
+    number: int = Field(description="the number of the request, from its '## 사용자 요청 #N' heading")
+    topic: str = Field(description="A heading of at most six words naming what this request was about.")
+    request: str = Field(description="What the user asked, in one short phrase.")
+    outcome: str = Field(description="What came of it, in one short phrase.")
+    observations: list[Observation] = Field(default_factory=list)
+    links: list[LinkCandidate] = Field(default_factory=list)
+
+
+class SessionChunk(BaseModel):
+    items: list[SessionItem] = Field(default_factory=list, description="One item per heading, in order; never fold two requests into one.")
+
+
+class Supersede(BaseModel):
+    old: int
+    by: int
+
+
+class SessionHeader(BaseModel):
+    title: str
+    summary: str
+    superseded: list[Supersede] = Field(default_factory=list)
+    tags: list[str] = Field(default_factory=list)
+
+
+class SessionNote(BaseModel):
+    header: SessionHeader
+    items: list[SessionItem] = Field(default_factory=list)
+    project: str = Field(default="", description="which project this note belongs to; empty means the job's own project")
+
+
+class SessionNotes(BaseModel):
+    notes: list[SessionNote] = Field(default_factory=list, description="one note per project the session worked on")
+
+
+class VerifyVerdict(BaseModel):
+    evidence: str
+    verdict: Literal["confirmed", "partly", "not_found", "contradicted"]
+    correction: str = Field(default="", description="the claim rewritten to match the repository, or empty when it already matches")
+
+
+class SplitChoice(BaseModel):
+    evidence: str
+    project: str
+    confidence: Literal["high", "low"]
+
+
+class LinkVerdict(BaseModel):
+    evidence: str = Field(description="Concrete facts from the two records: shared repository, paths, roots, what each one builds.")
+    reasoning: str = Field(description="Weigh the evidence. Say what would have to be true for each verdict.")
+    verdict: Literal["same", "part_of", "related", "unrelated"]
+    part: Literal["a", "b", "none"] = Field(description="For part_of, which project is the part. Otherwise none.")
+    confidence: Literal["high", "low"]
+    description: str = Field(default="", description="One short sentence naming the dependency, or empty for unrelated.")
 
 
 class NoteRelations(BaseModel):
     relations: list[Relation] = Field(default_factory=list)
 
 
-class SuggestionPublic(BaseModel):
+class ProjectSource(BaseModel):
+    path: str = Field(min_length=1, description="a working directory this project's sessions come from")
+    prefix: str = Field(default="", description="when the repository holds several projects, the directory inside it that is this one")
+
+
+class ProjectEntryWrite(BaseModel):
+    slug: ProjectName
+    description: str = Field(default="", description="what this project is, in the user's own words")
+    sources: list[ProjectSource] = Field(default_factory=list)
+    container: bool = Field(default=False, description="true when the repository itself is this project and others live inside it")
+
+
+class ProjectEntryPublic(ProjectEntryWrite):
     id: UUID
-    kind: SuggestionKind
+    updated_at: datetime
+
+
+class ProjectLinkWrite(BaseModel):
+    kind: LinkKind
+    source: ProjectName
+    target: ProjectName
+    description: str = ""
+    stated_by_user: str = Field(default="", description="what the user wrote about the pair, kept so a rebuild reaches the same conclusion")
+    confirmed: bool = True
+    summarizer: str = ""
+
+
+class ProjectLinkPublic(BaseModel):
+    id: UUID
+    kind: LinkKind
     source: str
     target: str
-    reason: str
+    description: str
+    stated_by_user: str
+    confirmed: bool
+    unrelated: bool
     summarizer: str
     created_at: datetime
 
@@ -66,6 +161,84 @@ class ProjectOverview(SummaryResult):
     title: str = Field(description="The name of the project, not the title of a session.")
     summary: str = Field(description="Two to five sentences on what the project is and where it stands now.")
     observations: list[Observation] = Field(default_factory=list, description="What holds, what is open and what is queued for this project.")
+
+
+class PromptWrite(PromptBase):
+    pass
+
+
+class PromptUpdate(BaseModel):
+    label: str | None = None
+    system: str | None = None
+    instruction: str | None = None
+    thinking: bool | None = None
+    temperature: float | None = Field(default=None, ge=0.0, le=2.0)
+    max_tokens: int | None = Field(default=None, ge=256)
+
+
+class PromptPublic(PromptBase):
+    id: UUID
+    status: PromptStatus
+    parent_id: UUID | None
+    created_at: datetime
+    updated_at: datetime
+
+
+class TranscriptRef(BaseModel):
+    agent: str = Field(min_length=1, max_length=100)
+    device: str = Field(min_length=1, max_length=200)
+    session_id: str = Field(min_length=1, max_length=200)
+    project: str = ""
+    cwd: str | None = None
+
+
+class TranscriptState(BaseModel):
+    id: UUID
+    byte_size: int
+    digest: str
+    started_at: datetime | None
+    ended_at: datetime | None
+
+
+class UploadState(BaseModel):
+    id: UUID
+    kind: UploadKind
+    byte_size: int
+    part_count: int
+    completed_at: datetime | None
+
+
+class GitSourceState(BaseModel):
+    network_id: UUID
+    source_id: UUID
+    namespace: str
+    refs: dict[str, str] = Field(default_factory=dict)
+    snapshot_ref: str | None = None
+
+
+class GitIngestRequest(BaseModel):
+    upload_id: UUID
+    device: str
+    path: str
+    remote: str | None = None
+    roots: list[str] = Field(default_factory=list, description="root commit hashes, which decide the network this repository belongs to")
+    snapshot: bool = Field(default=False, description="true when the bundle carries a worktree snapshot commit instead of real history")
+
+
+class GitQuery(BaseModel):
+    network_id: UUID
+    command: Literal["overview", "log", "show", "read_file", "grep", "worktree"]
+    rev: str = ""
+    path: str = ""
+    pattern: str = ""
+    since: str = ""
+    until: str = ""
+    start: int = Field(default=1, ge=1)
+    end: int = Field(default=200, ge=1)
+
+
+class GitQueryResult(BaseModel):
+    output: str
 
 
 class JobFailRequest(BaseModel):
@@ -98,9 +271,12 @@ class NoteSummary(BaseModel):
     path: str
     title: str
     project: str
-    project_path: str
     tags: list[str] = Field(default_factory=list)
     source: dict[str, Any] = Field(default_factory=dict)
+
+    @property
+    def ordered_at(self) -> str:
+        return str(self.source.get("ended_at") or self.source.get("started_at") or self.source.get("ingested_at") or "")
 
     @staticmethod
     def parse_markdown_file(path: Path, root: Path) -> tuple[dict[str, Any], str]:
@@ -108,12 +284,10 @@ class NoteSummary(BaseModel):
         source = post.metadata.get("source")
         tags = post.metadata.get("tags")
         relative = path.relative_to(root).as_posix()
-        segments = project_segments(relative)
         fields = {
             "path": relative,
             "title": str(post.metadata.get("title") or path.stem),
-            "project": segments[-1] if segments else UNFILED,
-            "project_path": "/".join(segments) if segments else UNFILED,
+            "project": project_of(relative),
             "tags": [str(tag) for tag in tags] if isinstance(tags, list) else [],
             "source": source if isinstance(source, dict) else {},
         }
@@ -135,13 +309,8 @@ class NoteDetail(NoteSummary):
 
 
 class ProjectNode(BaseModel):
-    path: str = Field(description="where the project sits under the notes directory, e.g. pyconkr/pyconkr-backend")
-    name: str
-    parent: str | None
-    depth: int
-    note_count: int = Field(description="notes filed under this project itself")
-    total_note_count: int = Field(description="notes filed under this project and everything below it")
-    child_count: int
+    name: str = Field(description="the project's slug, which is also its directory under projects/")
+    note_count: int
     unconfirmed: bool
     aliases: list[str] = Field(default_factory=list, description="inferred names a merge redirected here")
     overview: str | None = Field(default=None, description="path of the note that summarizes the project, once one has been written")
@@ -159,18 +328,79 @@ class ProjectMergeResult(BaseModel):
     merging: list[str] = Field(default_factory=list, description="memory files an LLM is merging in the background")
 
 
-class ProjectReparent(BaseModel):
-    parent: ProjectName | None = Field(default=None, description="the project to file this one under, or null for the top level")
-
-
 class ProjectDeleteResult(BaseModel):
-    path: str
+    project: str
     deleted_notes: int
-    deleted_projects: list[str]
+
+
+class NoteForget(BaseModel):
+    paths: list[str] = Field(min_length=1, description="notes to remove, as the paths the listing shows")
+    verdict: NoteVerdict = Field(default=NoteVerdict.HIDE, description="hide keeps the raw transcript, purge removes it so nothing can rebuild it")
+    reason: str = ""
+
+
+class NoteForgotten(BaseModel):
+    path: str
+    removed: bool
+    raw_removed: bool
+
+
+class NoteMove(BaseModel):
+    path: str
+    project: ProjectName
+    first_request: int = Field(default=0, ge=0, description="the request this applies from; 0 pins the whole session")
+    last_request: int = Field(default=0, ge=0, description="the last request it applies to; 0 means just first_request")
+
+
+class NoteMoved(BaseModel):
+    path: str
+    project: str
+    moved_to: str | None
+
+
+class NotePinPublic(BaseModel):
+    id: UUID
+    agent: str
+    device: str
+    session_id: str
+    project: str
+    first_request: int
+    last_request: int
+    created_at: datetime
+
+
+class NoteDecisionPublic(BaseModel):
+    id: UUID
+    agent: str
+    device: str
+    session_id: str
+    verdict: NoteVerdict
+    reason: str
+    created_at: datetime
 
 
 class MemoryContent(BaseModel):
     content: str
+
+
+class SplitRow(BaseModel):
+    number: int
+    project: str
+    how: Literal["path", "continue", "llm"]
+    votes: dict[str, int] = Field(default_factory=dict)
+
+
+class SessionPlan(BaseModel):
+    segments: list[str] = Field(default_factory=list, description="the session's requests, each rendered as one '## 사용자 요청 #N' block")
+    repository: str = Field(default="", description="what the project's repository holds right now: commits, touched files, uncommitted work")
+    network_id: UUID | None = Field(default=None, description="pass this to /api/git/query to look the repository up")
+    projects: list[str] = Field(default_factory=list, description="other known projects, one per line, for link candidates")
+    started_at: datetime | None = None
+    ended_at: datetime | None = None
+    split: list[SplitRow] = Field(default_factory=list, description="which project each request belongs to; rows marked llm still need a decision")
+    candidates: list[str] = Field(default_factory=list, description="the projects this repository holds, with what each one is")
+    names: list[str] = Field(default_factory=list, description="the slugs of those projects, the only values a split may choose")
+    verify_max_claims: int = Field(default=12, description="how many change and fact claims to check against the repository")
 
 
 class JobClaimed(BaseModel):
@@ -188,6 +418,8 @@ class JobClaimed(BaseModel):
     transcript: list[dict[str, Any]] | None
     context: str = Field(default="", description="notes from the projects above this one, as background for the summary")
     targets: list[str] = Field(default_factory=list, description="the names this job works with: child projects, or the notes it may link to")
+    plan: SessionPlan | None = Field(default=None, description="segments, repository state and link candidates a session job needs")
+    prompts: dict[str, dict[str, Any]] = Field(default_factory=dict, description="the active prompt for each stage, with its model settings")
 
 
 class RuntimeSettingUpdate(BaseModel):
@@ -207,6 +439,16 @@ class RuntimeSettingUpdate(BaseModel):
     overview_max_age_days: int | None = Field(default=None, ge=1)
     background_sweep_hours: int | None = Field(default=None, ge=1)
     background_batch_size: int | None = Field(default=None, ge=1)
+    display_timezone: str | None = None
+    verify_max_claims: int | None = Field(default=None, ge=0)
+
+    @field_validator("display_timezone")
+    @classmethod
+    def known_zone(cls, value: str | None) -> str | None:
+        return None if value is None else RuntimeSettingBase.known_zone(value)
+
+    rebuild_batch_size: int | None = Field(default=None, ge=0)
+    rebuild_max_age_days: int | None = Field(default=None, ge=1)
 
 
 class RuntimeSettingPublic(RuntimeSettingBase):

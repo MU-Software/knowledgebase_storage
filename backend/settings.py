@@ -34,6 +34,7 @@ class ProjectSetting(BaseSettings):
     host: str = "0.0.0.0"  # noqa: S104
     port: int = 8006
     notes_dir: Path = Path("/srv/knowledgebase/notes")
+    storage_dir: Path = Path("/srv/knowledgebase/storage")
     log_level: Literal["DEBUG", "INFO", "WARNING", "ERROR"] = "INFO"
     https_enabled: bool = False
     secret_key: SecretStr = Field(default_factory=lambda: SecretStr(token_hex(32)))
@@ -45,9 +46,9 @@ class ProjectSetting(BaseSettings):
     def cookie_samesite(self) -> Literal["lax", "strict", "none"]:
         return ("none" if self.https_enabled else "lax") if self.debug else "strict"
 
-    @field_validator("notes_dir")
+    @field_validator("notes_dir", "storage_dir")
     @classmethod
-    def resolve_notes_dir(cls, value: Path) -> Path:
+    def resolve_dir(cls, value: Path) -> Path:
         return value.expanduser().resolve()
 
     @classmethod

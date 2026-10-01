@@ -7,9 +7,12 @@ from fastapi import APIRouter, Depends
 from backend.dependencies.auth import authenticate
 from backend.routes.auth import router as auth_router
 from backend.routes.frontend import register_frontend
+from backend.routes.git import router as git_router
 from backend.routes.health import router as health_router
 from backend.routes.jobs import router as jobs_router
+from backend.routes.prompts import router as prompts_router
 from backend.routes.settings import router as settings_router
+from backend.routes.storage import router as storage_router
 from backend.routes.wiki import owner_router as wiki_owner_router, router as wiki_router
 
 if TYPE_CHECKING:
@@ -19,6 +22,9 @@ if TYPE_CHECKING:
 def register_routes(app: FastAPI) -> None:
     protected_router = APIRouter(dependencies=[Depends(authenticate)])
     protected_router.include_router(jobs_router)
+    protected_router.include_router(storage_router)
+    protected_router.include_router(git_router)
+    protected_router.include_router(prompts_router)
     protected_router.include_router(settings_router)
     protected_router.include_router(wiki_router)
     protected_router.include_router(wiki_owner_router)

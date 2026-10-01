@@ -5,6 +5,7 @@ from typing import TYPE_CHECKING, Annotated
 
 from fastapi import Depends
 
+from backend.consts.notes import PROJECTS_ROOT
 from backend.errors import ClientError
 from backend.repositories import FSRepositoryImpl
 from backend.schemas import NoteDetail, NoteSummary
@@ -26,8 +27,10 @@ class NoteRepository(FSRepositoryImpl):
             return None
 
     def list_summaries(self, project: str | None = None) -> list[NoteSummary]:
-        files = self.iter_files() if project is None else self.iter_files(f"projects/{project}")
-        return [summary for path in files if (summary := self._safe_summary(path)) is not None]
+        files = self.iter_files() if project is None else self.iter_files(f"{PROJECTS_ROOT}/{project}")
+        found = [summary for path in files if (summary := self._safe_summary(path)) is not None]
+        found.sort(key=lambda summary: summary.ordered_at, reverse=True)
+        return found
 
     def retrieve(self, relative_path: str) -> NoteDetail:
         if (target := self.resolve(relative_path)) is None:

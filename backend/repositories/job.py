@@ -6,7 +6,7 @@ from typing import TYPE_CHECKING, Annotated
 from uuid import uuid4
 
 from fastapi import Depends
-from sqlalchemy import delete, false, func, true, update
+from sqlalchemy import delete, exists, false, func, true, update
 from sqlalchemy.orm import defer
 from sqlmodel import col, desc, select
 from sqlmodel.sql.expression import and_, or_
@@ -19,7 +19,9 @@ from backend.models import (
     JobKind,
     JobStatus,
     LLMProvider,
+    NoteDecision,
     ProjectInference,
+    RawTranscript,
     background_session,
 )
 from backend.repositories import DBRepositoryImpl, OrderByType, QueryType
@@ -28,6 +30,24 @@ if TYPE_CHECKING:
     from collections.abc import Sequence
     from datetime import timedelta
     from typing import Any
+
+    from sqlalchemy.sql.elements import ColumnElement
+
+
+def undecided() -> ColumnElement[bool]:
+    return ~exists().where(
+        col(NoteDecision.agent) == col(Job.agent),
+        col(NoteDecision.device) == col(Job.device),
+        col(NoteDecision.session_id) == col(Job.session_id),
+    )
+
+
+def stored() -> ColumnElement[bool]:
+    return exists().where(
+        col(RawTranscript.agent) == col(Job.agent),
+        col(RawTranscript.device) == col(Job.device),
+        col(RawTranscript.session_id) == col(Job.session_id),
+    )
 
 
 class JobRepository(DBRepositoryImpl[Job]):
@@ -62,6 +82,7 @@ class JobRepository(DBRepositoryImpl[Job]):
                 col(Job.project) == project,
                 col(Job.status).in_([JobStatus.PENDING, JobStatus.CLAIMED]),
                 col(Job.session_id) != (exclude_session_id or ""),
+                undecided(),
             )
             .order_by(desc(col(Job.last_activity_at)))
             .limit(limit)
@@ -91,6 +112,7 @@ class JobRepository(DBRepositoryImpl[Job]):
                 or_(col(Job.next_attempt_at).is_(None), col(Job.next_attempt_at) <= now),
                 true() if background else col(Job.priority) == 0,
                 or_(col(Job.refined_at).is_(None), worse),
+                or_(col(Job.kind) != JobKind.SESSION, undecided()),
             ),
             order_by=[col(Job.priority), col(Job.created_at)],
             limit=1,
@@ -184,6 +206,14 @@ class JobRepository(DBRepositoryImpl[Job]):
         await self.session.commit()
         return int(result.rowcount or 0)
 
+    async def drop_pairs(self, project: str) -> int:
+        held = await self.list(query_filter=and_(col(Job.kind) == JobKind.PROJECT_LINK, col(Job.status) != JobStatus.DONE))
+        stale = [job for job in held if project in (job.note_path or "").split("~")]
+        for job in stale:
+            await self.session.delete(job)
+        await self.session.commit()
+        return len(stale)
+
     async def unfinished_memory_merges(self, project: str) -> Sequence[Job]:
         return await self.list(
             query_filter=and_(
@@ -205,6 +235,18 @@ class JobRepository(DBRepositoryImpl[Job]):
         job.next_attempt_at = None
         return await self.save(job)
 
+    async def requeue(self, job: Job) -> Job:
+        job.status = JobStatus.PENDING
+        job.priority = BACKGROUND_PRIORITY
+        job.attempts = 0
+        job.last_error = None
+        job.next_attempt_at = None
+        job.refined_at = None
+        job.claimed_at = None
+        job.claimed_by = None
+        job.claim_token = None
+        return await self.save(job)
+
     async def refinable(self, summarizers: list[str], limit: int) -> Sequence[Job]:
         return await self.list(
             query_filter=and_(
@@ -214,35 +256,59 @@ class JobRepository(DBRepositoryImpl[Job]):
                 col(Job.refined_at).is_(None),
                 col(Job.note_path).is_not(None),
                 col(Job.summarizer).in_(summarizers),
+                undecided(),
             ),
             order_by=[col(Job.created_at)],
             limit=limit,
         )
 
-    async def claim_overdue(self, deadline: timedelta, limit: int, worker: str) -> Sequence[Job]:
-        overdue = await self.find_overdue(deadline, limit)
-        for job in overdue:
-            job.status = JobStatus.CLAIMED
-            job.claimed_at = datetime.now(UTC)
-            job.claimed_by = worker
-            job.attempts += 1
-            self.session.add(job)
-        await self.session.commit()
-        for job in overdue:
-            await self.session.refresh(job)
-        return overdue
+    async def settle_without_note(self, job: Job, seen: datetime) -> bool:
+        query_filter = and_(
+            col(Job.id) == job.id,
+            col(Job.status) == JobStatus.PENDING,
+            col(Job.last_activity_at) == seen,
+            col(Job.note_path).is_(None),
+            col(Job.priority) == 0,
+        )
+        done = {"status": JobStatus.DONE, "completed_at": datetime.now(UTC), "transcript": None, "summarizer": BACKGROUND_AGENT, "last_error": None}
+        return await self.bulk_update(query_filter, **done) > 0
 
-    async def find_overdue(self, deadline: timedelta, limit: int) -> Sequence[Job]:
-        return await self.list(
-            query_filter=and_(
+    async def summarized_before(self, stale_before: datetime, limit: int) -> Sequence[Job]:
+        query = (
+            select(Job)
+            .where(
+                col(Job.kind) == JobKind.SESSION,
+                col(Job.status) == JobStatus.DONE,
+                col(Job.completed_at).is_not(None),
+                col(Job.completed_at) < stale_before,
+                undecided(),
+                stored(),
+            )
+            .order_by(col(Job.completed_at))
+            .limit(limit)
+        )
+        return (await self.session.exec(query)).all()
+
+    async def settle_decided(self) -> int:
+        query_filter = and_(col(Job.kind) == JobKind.SESSION, col(Job.status) == JobStatus.PENDING, ~undecided())
+        return await self.bulk_update(query_filter, status=JobStatus.DONE, completed_at=datetime.now(UTC), transcript=None, claim_token=None)
+
+    async def pending_sessions(self, limit: int, idle: timedelta) -> Sequence[Job]:
+        now = datetime.now(UTC)
+        query = (
+            select(Job)
+            .where(
+                col(Job.kind) == JobKind.SESSION,
                 col(Job.status) == JobStatus.PENDING,
-                col(Job.created_at) < datetime.now(UTC) - deadline,
-            ),
-            order_by=[col(Job.created_at)],
-            limit=limit,
-            with_for_update=True,
-            skip_locked=True,
+                col(Job.priority) == 0,
+                or_(col(Job.next_attempt_at).is_(None), col(Job.next_attempt_at) <= now),
+                col(Job.last_activity_at) <= now - idle,
+                col(Job.note_path).is_(None),
+            )
+            .order_by(col(Job.updated_at))
+            .limit(limit)
         )
+        return (await self.session.exec(query)).all()
 
     async def reclaim_stale(self, stale_after: timedelta) -> int:
         return await self.bulk_update(

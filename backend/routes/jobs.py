@@ -6,7 +6,17 @@ from uuid import UUID
 from fastapi import APIRouter, Query, Response, status
 
 from backend.models import JobBase, JobStatus
-from backend.schemas import JobClaimed, JobFailRequest, JobPage, JobPublic, MemoryContent, NoteRelations, ProjectSuggestions, SummaryResult
+from backend.schemas import (
+    JobClaimed,
+    JobFailRequest,
+    JobPage,
+    JobPublic,
+    LinkVerdict,
+    MemoryContent,
+    NoteRelations,
+    SessionNotes,
+    SummaryResult,
+)
 from backend.services.background import backgroundServiceDI
 from backend.services.jobs import jobServiceDI
 
@@ -48,6 +58,18 @@ async def submit_result(
     return JobPublic.model_validate(await service.complete(job, payload, summarizer), from_attributes=True)
 
 
+@router.post("/{job_id}/note")
+async def submit_note(
+    job_id: UUID,
+    payload: SessionNotes,
+    service: jobServiceDI,
+    summarizer: Annotated[str, Query(description="provider that wrote it")],
+    token: Annotated[UUID, Query(description="claim token")],
+) -> JobPublic:
+    job = await service.claim_held(job_id, token)
+    return JobPublic.model_validate(await service.complete_session(job, payload, summarizer), from_attributes=True)
+
+
 @router.post("/{job_id}/memory")
 async def submit_memory(
     job_id: UUID,
@@ -72,16 +94,16 @@ async def submit_overview(
     return JobPublic.model_validate(await service.complete_overview(job, payload, summarizer), from_attributes=True)
 
 
-@router.post("/{job_id}/suggestions")
-async def submit_suggestions(
+@router.post("/{job_id}/link")
+async def submit_link(
     job_id: UUID,
-    payload: ProjectSuggestions,
+    payload: LinkVerdict,
     service: jobServiceDI,
-    token: Annotated[UUID, Query(description="claim token returned by /claim")],
-    summarizer: Annotated[str, Query(description="name of the provider that produced this")],
+    summarizer: Annotated[str, Query(description="provider that judged it")],
+    token: Annotated[UUID, Query(description="claim token")],
 ) -> JobPublic:
     job = await service.claim_held(job_id, token)
-    return JobPublic.model_validate(await service.complete_suggestions(job, payload, summarizer), from_attributes=True)
+    return JobPublic.model_validate(await service.complete_link(job, payload, summarizer), from_attributes=True)
 
 
 @router.post("/{job_id}/relations")

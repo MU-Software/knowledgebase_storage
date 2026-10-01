@@ -43,6 +43,20 @@ Three rules shape the design:
   the projects under it, proposes projects that should be merged or nested, links notes to the ones
   they continue, and redoes the summaries a weaker provider wrote while the transcript is still inside
   `transcript_retention_hours`. Leave that off for a provider you pay per token.
+- **Raw data is kept, notes are derived.** `STORAGE_DIR` holds every session's original jsonl, one
+  bare repository per git network, and worktree snapshots. The hook appends to the transcript from the
+  byte the server already has, and uploads history as a filtered bundle. Notes, splits, overviews and
+  links are rebuilt from that at any time with `POST /api/raw/rebuild`.
+- **The summarizer checks the repository.** A session job carries its requests one block each, the
+  repository's current state and a `network_id`. The worker explores with read-only git tools through
+  `/api/git/query`, writes one entry per request, then verifies what it claimed about code and applies
+  the corrections. Prompts are database rows, edited and versioned in the wiki.
+- **Projects are scopes.** A `project_entry` holds what a project is, in your words, and the
+  directories its sessions come from. One repository can hold several, so a session is filed per
+  request by touched path first and by the model only when the path says nothing.
+- **Links carry a description.** `same`, `part_of` and `related` all live in one table with the
+  sentence that explains them and, when you wrote one, your own words. Judgements are advice: a
+  candidate pair is found by code, and nothing is applied until you confirm it.
 - **Only bootstrap values live in the environment.** Everything else is a database row you
   edit in the wiki, which the worker fetches with an ETag and a 304.
 
@@ -80,3 +94,21 @@ See [`hooks/README.md`](hooks/README.md).
 
 Merge `infra/docker-compose.workbench.yaml` into the compose file on the host.
 Exposure is a tailnet IP binding only — nginx is not involved.
+The api runs `git` against the stored repositories, so its image installs git and keeps
+`STORAGE_DIR` on a volume of its own; the worker needs neither, since it reads repositories
+through `/api/git/query`. After pulling a new image, run `uv run alembic upgrade head` in the api
+container.
+
+## Rebuilding
+
+Notes are derived data: the transcripts and git repositories under `STORAGE_DIR` are the originals,
+so a note can always be written again without asking any device to upload anything.
+
+```sh
+python -m backend.cli reset            # delete the notes and jobs, keep everything else
+curl -X POST .../api/raw/rebuild       # queue the stored transcripts again
+```
+
+`--decisions` also forgets merges, links, project scopes, pins and deletions; `--raw` deletes the
+stored originals as well, and only then does every device have to import again. `rebuild_batch_size`
+in the runtime settings does the same thing gradually, oldest note first.

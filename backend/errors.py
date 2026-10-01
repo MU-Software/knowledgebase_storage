@@ -138,17 +138,29 @@ class ClientError(ErrorEnum):
         "STALE_CLAIM": ErrorStructDict(status_code=status.HTTP_409_CONFLICT),
         "INVALID_NOTE_PATH": ErrorStructDict(status_code=status.HTTP_400_BAD_REQUEST),
         "INVALID_PROJECT_MERGE": ErrorStructDict(status_code=status.HTTP_400_BAD_REQUEST),
-        "INVALID_PROJECT_PARENT": ErrorStructDict(status_code=status.HTTP_400_BAD_REQUEST),
         "INVALID_MEMORY_PATH": ErrorStructDict(status_code=status.HTTP_400_BAD_REQUEST),
+        "INVALID_STORAGE_PATH": ErrorStructDict(status_code=status.HTTP_400_BAD_REQUEST),
+        "UPLOAD_OFFSET_MISMATCH": ErrorStructDict(status_code=status.HTTP_409_CONFLICT),
+        "NOTE_WAS_PURGED": ErrorStructDict(status_code=status.HTTP_409_CONFLICT),
+        "LINK_WOULD_CYCLE": ErrorStructDict(status_code=status.HTTP_409_CONFLICT),
+        "UPLOAD_DIGEST_MISMATCH": ErrorStructDict(status_code=status.HTTP_400_BAD_REQUEST),
+        "GIT_COMMAND_FAILED": ErrorStructDict(status_code=status.HTTP_400_BAD_REQUEST),
+        "INVALID_GIT_ARGUMENT": ErrorStructDict(status_code=status.HTTP_400_BAD_REQUEST),
     }
 
     RESOURCE_NOT_FOUND = "The {resource} was not found."
     RESOURCE_ALREADY_EXISTS = "The {resource} already exists."
     STALE_CLAIM = "Job {job_id} is no longer held by this claim."
     INVALID_NOTE_PATH = "A note path must stay inside the notes directory and end with .md: {path}"
-    INVALID_PROJECT_MERGE = "A project cannot be merged into itself or into one of the projects it holds."
-    INVALID_PROJECT_PARENT = "A project cannot be filed under itself or under one of the projects it holds."
+    INVALID_PROJECT_MERGE = "A project cannot be merged into itself."
     INVALID_MEMORY_PATH = "Job {job_id} does not point at a memory file."
+    INVALID_STORAGE_PATH = "A stored path must stay inside the storage directory: {path}"
+    UPLOAD_OFFSET_MISMATCH = "The upload holds {expected} bytes, so it cannot continue from {given}."
+    LINK_WOULD_CYCLE = "{source} cannot be part of {target}: {target} is already part of {source}, directly or through other projects."
+    NOTE_WAS_PURGED = "Session {session_id} was deleted with its transcript, so it is not stored again."
+    UPLOAD_DIGEST_MISMATCH = "The uploaded bytes do not match the digest given."
+    GIT_COMMAND_FAILED = "git {command} failed: {detail}"
+    INVALID_GIT_ARGUMENT = "A git argument may not start with a dash: {argument}"
 
     USERNAME_REQUIRED = "Enter a username."
     USERNAME_TOO_SHORT = "The username is too short. Use {min_len} to {max_len} characters."

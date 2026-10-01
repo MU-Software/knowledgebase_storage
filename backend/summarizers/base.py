@@ -1,13 +1,35 @@
 from __future__ import annotations
 
 from abc import ABC, abstractmethod
-from typing import Any
+from dataclasses import dataclass
+from typing import TYPE_CHECKING, Any, TypeVar
+
+from pydantic import BaseModel
 
 from backend.models import MIN_BUDGET_TOKENS, MIN_CONTEXT_TOKENS, PROMPT_OVERHEAD_TOKENS
-from backend.schemas import NoteRelations, ProjectSuggestions, SummaryResult
+from backend.schemas import LinkVerdict, NoteRelations, SummaryResult
 from backend.summarizers import prompt
 
+if TYPE_CHECKING:
+    from collections.abc import Awaitable, Callable
+
+
 MAX_REDUCE_ROUNDS = 5
+R = TypeVar("R", bound=BaseModel)
+
+
+@dataclass
+class Toolbox:
+    specs: list[dict[str, Any]]
+    run: Callable[[str, dict[str, Any]], Awaitable[str]]
+    rounds: int = 6
+
+
+def strict(schema: dict[str, Any]) -> dict[str, Any]:
+    for definition in (schema, *schema.get("$defs", {}).values()):
+        if "properties" in definition:
+            definition["required"] = list(definition["properties"])
+    return schema
 
 
 class Summarizer(ABC):
@@ -15,7 +37,23 @@ class Summarizer(ABC):
     language: str
 
     @abstractmethod
-    async def complete(self, system: str, user: str, *, schema: dict[str, Any] | None = None) -> str: ...
+    async def complete(self, system: str, user: str, *, schema: dict[str, Any] | None = None, settings: dict[str, Any] | None = None) -> str: ...
+
+    async def explore(self, system: str, user: str, tools: Toolbox, settings: dict[str, Any] | None = None) -> str:
+        del system, user, tools, settings
+        return ""
+
+    async def investigate(self, system: str, user: str, tools: Toolbox, model: type[R], settings: dict[str, Any] | None = None) -> R | None:
+        del system, user, tools, model, settings
+        return None
+
+    async def speak(self, system: str, user: str, settings: dict[str, Any] | None = None) -> str:
+        return await self.complete(system, user, settings=settings)
+
+    async def shaped(self, system: str, user: str, model: type[R], settings: dict[str, Any] | None = None) -> R:
+        answer = await self.complete(system, user, schema=strict(model.model_json_schema()), settings=settings)
+        start, end = answer.find("{"), answer.rfind("}")
+        return model.model_validate_json(answer if start == -1 else answer[start : end + 1])
 
     @property
     def budget(self) -> int:
@@ -50,8 +88,8 @@ class Summarizer(ABC):
     async def summarize(self, messages: list[dict[str, Any]], *, agent: str, project: str, device: str, background: str = "") -> SummaryResult:
         return await self.fold(messages, prompt.session_recipe(self.language, agent=agent, project=project, device=device, background=background))
 
-    async def summarize_project(self, records: list[dict[str, Any]], *, project: str, children: list[str]) -> SummaryResult:
-        return await self.fold(records, prompt.overview_recipe(self.language, project=project, children=children))
+    async def summarize_project(self, records: list[dict[str, Any]], *, project: str) -> SummaryResult:
+        return await self.fold(records, prompt.overview_recipe(self.language, project=project))
 
     async def merge_memories(self, documents: list[dict[str, Any]], *, project: str, name: str) -> str:
         system = prompt.memory_merge_system_prompt(self.language)
@@ -61,11 +99,9 @@ class Summarizer(ABC):
             raise ValueError(msg)
         return (await self.complete(system, user)).strip() + "\n"
 
-    async def suggest_projects(self, catalog: list[dict[str, Any]]) -> ProjectSuggestions:
-        body = prompt.first_that_fits(prompt.render_documents(catalog), self.budget)
-        user = prompt.build_user_prompt(prompt.SUGGESTION_INSTRUCTION, body, "")
-        answer = await self.complete(prompt.suggestion_system_prompt(self.language), user, schema=prompt.SUGGESTIONS_JSON_SCHEMA)
-        return ProjectSuggestions.model_validate_json(answer)
+    async def judge_pair(self, records: list[dict[str, Any]], system: str, settings: dict[str, Any] | None = None) -> LinkVerdict:
+        body = prompt.first_that_fits(prompt.render_documents(records), self.budget)
+        return await self.shaped(system, body, LinkVerdict, settings)
 
     async def find_relations(self, note: list[dict[str, Any]], *, candidates: list[str]) -> NoteRelations:
         body = prompt.first_that_fits(prompt.render_documents(note), self.budget // 2)

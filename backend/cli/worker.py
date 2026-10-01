@@ -12,9 +12,11 @@ from typing import TYPE_CHECKING, Any
 import typer
 from httpx import AsyncClient, codes
 
-from backend.models import JobKind
-from backend.schemas import WorkerConfig
+from backend.models import JobKind, ProviderKind
+from backend.schemas import SessionItem, SessionNote, WorkerConfig
 from backend.summarizers import build_summarizer
+from backend.summarizers.base import Toolbox
+from backend.summarizers.session import MAX_VERIFIED, SessionPipeline
 
 if TYPE_CHECKING:
     from collections.abc import Generator
@@ -94,6 +96,155 @@ def fallback_order(config: WorkerConfig, first: LLMProviderResolved, job: dict[s
     return [first] if previous is None else [provider for provider in order if provider.priority < previous.priority]
 
 
+GIT_SPECS = [
+    {
+        "type": "function",
+        "function": {
+            "name": "search_changes",
+            "description": "Commits whose diff adds or removes lines matching an extended regex, with the files they touched.",
+            "parameters": {
+                "type": "object",
+                "properties": {"pattern": {"type": "string"}, "since": {"type": "string"}, "until": {"type": "string"}},
+                "required": ["pattern"],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "git_log",
+            "description": "Commits in a time range with the files each one changed.",
+            "parameters": {
+                "type": "object",
+                "properties": {"since": {"type": "string"}, "until": {"type": "string"}, "path": {"type": "string"}},
+                "required": [],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "git_show",
+            "description": "One commit's message and diff, optionally limited to a path.",
+            "parameters": {"type": "object", "properties": {"commit": {"type": "string"}, "path": {"type": "string"}}, "required": ["commit"]},
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "read_file",
+            "description": "Numbered lines of a file. Leave rev out for the newest commit.",
+            "parameters": {
+                "type": "object",
+                "properties": {"rev": {"type": "string"}, "path": {"type": "string"}, "start": {"type": "integer"}, "end": {"type": "integer"}},
+                "required": ["path"],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "grep",
+            "description": "Search a revision's files with an extended regex.",
+            "parameters": {
+                "type": "object",
+                "properties": {"rev": {"type": "string"}, "pattern": {"type": "string"}, "path": {"type": "string"}},
+                "required": ["rev", "pattern"],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "worktree_diff",
+            "description": "Uncommitted changes the session left behind, optionally one path. Use this when nothing was committed.",
+            "parameters": {"type": "object", "properties": {"path": {"type": "string"}}, "required": []},
+        },
+    },
+]
+COMMANDS = {
+    "search_changes": "log",
+    "git_log": "log",
+    "git_show": "show",
+    "read_file": "read_file",
+    "grep": "grep",
+    "worktree_diff": "worktree",
+}
+
+
+def git_toolbox(api: AsyncClient, network_id: str) -> Toolbox:
+    async def run(name: str, arguments: dict[str, Any]) -> str:
+        body = {
+            "network_id": network_id,
+            "command": COMMANDS.get(name, "log"),
+            "rev": arguments.get("rev") or arguments.get("commit") or "",
+            "path": arguments.get("path") or "",
+            "pattern": arguments.get("pattern") or "",
+            "since": arguments.get("since") or "",
+            "until": arguments.get("until") or "",
+            "start": int(arguments.get("start") or 1),
+            "end": int(arguments.get("end") or 200),
+        }
+        try:
+            response = await api.post("/api/git/query", json=body)
+            response.raise_for_status()
+        except Exception as exc:  # noqa: BLE001
+            return f"tool failed: {exc}"
+        return str(response.json().get("output") or "")
+
+    return Toolbox(specs=GIT_SPECS, run=run, rounds=6)
+
+
+def moment(value: object) -> str:
+    try:
+        return datetime.fromisoformat(str(value)).astimezone().strftime("%Y-%m-%d %H:%M:%S %z")
+    except ValueError:
+        return ""
+
+
+def background_of(job: dict[str, Any], plan: dict[str, Any]) -> str:
+    lines = [f"This session's project: {job['project']}"]
+    if window := " to ".join(filter(None, (moment(plan.get("started_at")), moment(plan.get("ended_at"))))):
+        lines.append(f"It ran from {window}. Copy a timestamp with its offset when a tool asks for one.")
+    parts = ["\n".join(lines)]
+    if state := plan.get("repository"):
+        parts.append(f"The repository as it stands now:\n{state}")
+    if projects := plan.get("projects"):
+        parts.append("Other known projects:\n" + "\n".join(projects))
+    if context := job.get("context"):
+        parts.append(f"Notes from the projects this one sits under:\n{context}")
+    return "\n\n".join(parts) + "\n\n---\n\n"
+
+
+async def produce_session(api: AsyncClient, job: dict[str, Any], provider: LLMProviderResolved, language: str) -> tuple[str, dict[str, Any]] | None:
+    plan = job.get("plan") or {}
+    segments = plan.get("segments") or []
+    prompts = job.get("prompts") or {}
+    if not segments or "session_chunk" not in prompts:
+        return None
+    summarizer = build_summarizer(provider, language)
+    network_id = plan.get("network_id")
+    tools = git_toolbox(api, str(network_id)) if network_id and provider.kind == ProviderKind.LLAMA else None
+    verified = plan.get("verify_max_claims")
+    pipeline = SessionPipeline(summarizer, prompts, tools, MAX_VERIFIED if verified is None else int(verified))
+    note = await pipeline.run(segments, background_of(job, plan))
+    candidates = plan.get("candidates") or []
+    filed = await pipeline.filed(segments, plan.get("split") or [], candidates, plan.get("names") or [], job["project"])
+    return "note", {"notes": [note.model_dump(mode="json") for note in shared(note, filed, job["project"])]}
+
+
+def shared(note: SessionNote, filed: dict[int, str], container: str) -> list[SessionNote]:
+    if not filed:
+        return [note]
+    owners = {number: project for number, project in filed.items() if project}
+    grouped: dict[str, list[SessionItem]] = {}
+    for item in note.items:
+        grouped.setdefault(owners.get(item.number, container), []).append(item)
+    if len(grouped) == 1:
+        return [note.model_copy(update={"project": next(iter(grouped))})]
+    return [note.model_copy(update={"items": items, "project": project}) for project, items in grouped.items()]
+
+
 async def produce(job: dict[str, Any], provider: LLMProviderResolved, language: str) -> tuple[str, dict[str, Any]]:
     summarizer = build_summarizer(provider, language)
     kind, project = job.get("kind"), job["project"]
@@ -103,10 +254,12 @@ async def produce(job: dict[str, Any], provider: LLMProviderResolved, language: 
         name = PurePosixPath(job.get("note_path") or "memory.md").name
         return "memory", {"content": await summarizer.merge_memories(records, project=project, name=name)}
     if kind == JobKind.PROJECT_OVERVIEW:
-        page = await summarizer.summarize_project(records, project=project, children=targets)
+        page = await summarizer.summarize_project(records, project=project)
         return "overview", page.model_dump(mode="json")
-    if kind == JobKind.PROJECT_SUGGESTION:
-        return "suggestions", (await summarizer.suggest_projects(records)).model_dump(mode="json")
+    if kind == JobKind.PROJECT_LINK:
+        stage = (job.get("prompts") or {}).get("project_link") or {}
+        verdict = await summarizer.judge_pair(records, str(stage.get("system", "")), stage)
+        return "link", verdict.model_dump(mode="json")
     if kind == JobKind.NOTE_RELATIONS:
         return "relations", (await summarizer.find_relations(records, candidates=targets)).model_dump(mode="json")
 
@@ -145,7 +298,8 @@ async def process(api: AsyncClient, job: dict[str, Any], config: WorkerConfig, f
 
             logger.info("working job %s (%s) with %s (project=%s)", job_id, job.get("kind"), provider.name, job["project"])
             try:
-                endpoint, body = await produce(job, provider, config.document_language)
+                shaped = await produce_session(api, job, provider, config.document_language) if job.get("kind") == JobKind.SESSION else None
+                endpoint, body = shaped if shaped is not None else await produce(job, provider, config.document_language)
             except Exception as exc:  # noqa: BLE001
                 logger.warning("provider %s failed on job %s: %s", provider.name, job_id, exc)
                 errors.append(f"{provider.name}: {exc}")
@@ -157,11 +311,15 @@ async def process(api: AsyncClient, job: dict[str, Any], config: WorkerConfig, f
                 params={"summarizer": provider.name, "token": token},
                 json=body,
             )
-            response.raise_for_status()
+            if response.status_code != codes.CONFLICT:
+                response.raise_for_status()
         except Exception:
             logger.exception("failed to submit the result of job %s", job_id)
             return False
-        logger.info("job %s done via %s", job_id, provider.name)
+        if response.status_code == codes.CONFLICT:
+            logger.info("job %s was settled while it ran, so its result is dropped", job_id)
+        else:
+            logger.info("job %s done via %s", job_id, provider.name)
         return True
 
     if busy:

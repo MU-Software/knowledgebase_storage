@@ -9,22 +9,26 @@ from fastapi import Depends
 from sqlalchemy import true
 from sqlmodel import col
 
-from backend.consts.notes import MEMORY_DIR
+from backend.consts.notes import MEMORY_DIR, named_project
 from backend.errors import ClientError
 from backend.models import Job, JobBase, JobStatus
+from backend.repositories.decision import noteDecisionRepositoryDI, notePinRepositoryDI
 from backend.repositories.job import JobRepository, jobRepositoryDI
+from backend.repositories.raw import rawTranscriptRepositoryDI
 from backend.repositories.setting import llmProviderRepositoryDI, runtimeSettingRepositoryDI
-from backend.schemas import MemoryFile, MemorySync
+from backend.schemas import MemoryFile, MemorySync, SessionNote
 from backend.services import ServiceImpl
 from backend.services.background import backgroundServiceDI
-from backend.services.notes import noteServiceDI
+from backend.services.links import linkServiceDI
+from backend.services.notes import NoteTarget, noteServiceDI
 from backend.services.projects import projectServiceDI
 
 if TYPE_CHECKING:
     from collections.abc import Sequence
     from uuid import UUID
 
-    from backend.schemas import NoteRelations, ProjectSuggestions, SummaryResult
+    from backend.models import NotePin
+    from backend.schemas import LinkVerdict, NoteRelations, SessionHeader, SessionItem, SessionNotes, SummaryResult
 
 logger = logging.getLogger(__name__)
 
@@ -46,11 +50,20 @@ class JobService(ServiceImpl[JobRepository]):
     background: backgroundServiceDI
     providers: llmProviderRepositoryDI
     runtime: runtimeSettingRepositoryDI
+    transcripts: rawTranscriptRepositoryDI
+    links: linkServiceDI
+    decisions: noteDecisionRepositoryDI
+    pins: notePinRepositoryDI
 
     async def enqueue(self, payload: JobBase) -> tuple[Job, bool]:
-        payload.project = await self.projects.resolve(payload.project)
+        payload.project = await self.projects.resolve(named_project(payload.project))
         now, digest = datetime.now(UTC), payload.digest
         existing = await self.repository.find_by_session(payload.agent, payload.device, payload.session_id, lock=True)
+        if await self.decisions.held_back(payload.agent, payload.device, payload.session_id):
+            if existing is not None:
+                return existing, False
+            settled = Job(**payload.model_dump(exclude={"transcript"}), status=JobStatus.DONE, created_at=now, last_activity_at=now, completed_at=now)
+            return await self.repository.save(settled), True
         if existing is None:
             job = Job(
                 **payload.model_dump(),
@@ -100,8 +113,52 @@ class JobService(ServiceImpl[JobRepository]):
         job.next_attempt_at = datetime.now(UTC) + timedelta(seconds=retry_after_seconds) if retry_after_seconds else None
         return await self.repository.save(job)
 
-    async def complete(self, job: Job, result: SummaryResult, summarizer: str) -> Job:
-        job.note_path = self.notes.write(job, result, summarizer, await self.projects.resolve_path(job.project))
+    async def complete_session(self, job: Job, payload: SessionNotes, summarizer: str) -> Job:
+        zone = (await self.runtime.get()).zone
+        transcript = await self.transcripts.find_by_session(job.agent, job.device, job.session_id)
+        window = (transcript.started_at, transcript.ended_at) if transcript else (job.started_at, job.ended_at)
+        here = await self.projects.resolve(job.project)
+        pins = await self.pins.around(job.agent, job.device, job.session_id)
+        home = next((pin.project for pin in pins if pin.first_request == 0), here)
+        wanted = self.repinned(payload.notes, pins, here) if pins else payload.notes
+        if not wanted:
+            return await self.fail(job, "the summary came back without a note")
+        merged: dict[str, SessionNote] = {}
+        for note in wanted:
+            slug = here if not note.project else await self.projects.resolve(note.project)
+            held = merged.get(slug)
+            items = note.items if held is None else [*held.items, *note.items]
+            merged[slug] = (held or note).model_copy(update={"project": slug, "items": items})
+        own = merged.pop(home, None)
+        written = {
+            self.notes.write_session(job, note, summarizer, NoteTarget(project=slug, window=window, zone=zone, sidecar=True))
+            for slug, note in merged.items()
+        }
+        if own is not None:
+            job.note_path = self.notes.write_session(job, own, summarizer, NoteTarget(project=home, window=window, zone=zone))
+            written.add(job.note_path)
+        elif written:
+            job.note_path = next(iter(sorted(written)))
+        if written:
+            self.notes.forget_others(job, written)
+        elif job.note_path and self.notes.repository.resolve(job.note_path) is None:
+            job.note_path = None
+        await self.links.absorb(job, [*([own] if own else []), *merged.values()], summarizer)
+        return await self.written(job, summarizer)
+
+    @staticmethod
+    def repinned(notes: list[SessionNote], pins: Sequence[NotePin], here: str) -> list[SessionNote]:
+        grouped: dict[str, list[SessionItem]] = {}
+        headers: dict[str, SessionHeader] = {}
+        for note in notes:
+            owner = note.project or here
+            for item in note.items:
+                project = next((pin.project for pin in pins if pin.holds(item.number)), owner)
+                grouped.setdefault(project, []).append(item)
+                headers.setdefault(project, note.header)
+        return [SessionNote(header=headers[project], items=items, project=project) for project, items in grouped.items()]
+
+    async def written(self, job: Job, summarizer: str) -> Job:
         job.summarizer = summarizer
         job.completed_at = datetime.now(UTC)
         job.last_error = None
@@ -115,6 +172,11 @@ class JobService(ServiceImpl[JobRepository]):
             job.status = JobStatus.DONE
         return await self.repository.save(job)
 
+    async def complete(self, job: Job, result: SummaryResult, summarizer: str) -> Job:
+        zone = (await self.runtime.get()).zone
+        job.note_path = self.notes.write(job, result, summarizer, await self.projects.resolve(job.project), zone)
+        return await self.written(job, summarizer)
+
     async def settle(self, job: Job, summarizer: str) -> Job:
         job.summarizer = summarizer
         job.completed_at = datetime.now(UTC)
@@ -127,7 +189,7 @@ class JobService(ServiceImpl[JobRepository]):
     async def complete_memory(self, job: Job, content: str, summarizer: str) -> Job:
         if job.note_path is None or f"/{MEMORY_DIR}/" not in job.note_path:
             ClientError.INVALID_MEMORY_PATH.format_msg(job_id=job.id).raise_()
-        if self.background.moved_on(job):
+        if await self.background.moved_on(job):
             return await self.release(job)
 
         file = MemoryFile(name=PurePosixPath(job.note_path).name, content=self.notes.clean_memory(content))
@@ -137,12 +199,12 @@ class JobService(ServiceImpl[JobRepository]):
 
     async def complete_overview(self, job: Job, result: SummaryResult, summarizer: str) -> Job:
         job.note_path = self.background.write_overview(job, result, summarizer)
-        moved_on = self.background.moved_on(job)
+        moved_on = await self.background.moved_on(job)
         await self.background.cascade(job)
         return await self.release(job) if moved_on else await self.settle(job, summarizer)
 
-    async def complete_suggestions(self, job: Job, result: ProjectSuggestions, summarizer: str) -> Job:
-        await self.background.apply_suggestions(result, summarizer)
+    async def complete_link(self, job: Job, verdict: LinkVerdict, summarizer: str) -> Job:
+        await self.links.judged(job.note_path or "", verdict, summarizer)
         return await self.settle(job, summarizer)
 
     async def complete_relations(self, job: Job, result: NoteRelations, summarizer: str) -> Job:

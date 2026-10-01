@@ -1,5 +1,6 @@
 import typer
 
+from backend.cli.reset import reset
 from backend.cli.users import create_user, set_password
 from backend.cli.worker import worker
 
@@ -14,6 +15,7 @@ def main() -> None:
 cli.command()(worker)
 cli.command()(create_user)
 cli.command()(set_password)
+cli.command()(reset)
 
 if __name__ == "__main__":
     cli()

@@ -25,6 +25,12 @@ const Layout = () => {
           <Button color="inherit" component={Link} to="/jobs">
             Jobs
           </Button>
+          <Button color="inherit" component={Link} to="/links">
+            Links
+          </Button>
+          <Button color="inherit" component={Link} to="/prompts">
+            Prompts
+          </Button>
           <Button color="inherit" component={Link} to="/settings">
             Settings
           </Button>

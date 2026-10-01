@@ -7,6 +7,8 @@ from anthropic import AsyncAnthropic
 
 from backend.summarizers.base import Summarizer
 
+MAX_TOKENS = 8192
+
 if TYPE_CHECKING:
     from backend.schemas import LLMProviderResolved
 
@@ -20,7 +22,7 @@ class AnthropicSummarizer(Summarizer):
         self.context_tokens = provider.context_tokens
         self.language = language
 
-    async def complete(self, system: str, user: str, *, schema: dict[str, Any] | None = None) -> str:
+    async def complete(self, system: str, user: str, *, schema: dict[str, Any] | None = None, settings: dict[str, Any] | None = None) -> str:
         structured_kwargs: dict[str, Any] = (
             {}
             if schema is None
@@ -31,7 +33,7 @@ class AnthropicSummarizer(Summarizer):
         )
         response = await self.client.messages.create(
             model=self.model,
-            max_tokens=8192,
+            max_tokens=min(int((settings or {}).get("max_tokens", MAX_TOKENS)), MAX_TOKENS),
             system=system,
             messages=[{"role": "user", "content": user}],
             **structured_kwargs,

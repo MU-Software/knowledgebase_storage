@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from typing import Any, NamedTuple
 
-from backend.schemas import NoteRelations, ProjectOverview, ProjectSuggestions, SummaryResult
+from backend.schemas import NoteRelations, ProjectOverview, SummaryResult
 
 SYSTEM_PROMPT_TEMPLATE = """\
 You are a librarian who turns development session logs into knowledge-base notes.
@@ -73,26 +73,8 @@ Remove duplicates; when two disagree, prefer the later one.
 """
 
 OVERVIEW_SINGLE_INSTRUCTION = """\
-Below is a project's session notes, newest first, and the standing pages of the projects under it.
+Below is a project's session notes, newest first, and how it is linked to other projects.
 Write this project's standing page.
-"""
-
-SUGGESTION_SYSTEM_TEMPLATE = """\
-You are a librarian who notices when two projects in a knowledge base are really one.
-
-Rules:
-- Suggest merge only when two names are the same work: a rename, a remote that moved, a directory and its repository.
-- Suggest nest only when one is plainly a part of the other, such as a service of a system or a package of a monorepo.
-- Sharing a language, a framework, an author or a machine is not a relation. Say nothing about those.
-- A project already filed under another is settled. Say nothing about that pair.
-- Copy the names exactly as they are given, and never name a project twice in one suggestion.
-- An empty list is the right answer most of the time. Say nothing rather than guess.
-- Write reason in {language}, in one sentence.
-"""
-
-SUGGESTION_INSTRUCTION = """\
-Below is every project in the knowledge base with what is known about it.
-Name the pairs that should become one project, or one filed under the other.
 """
 
 RELATION_SYSTEM_TEMPLATE = """\
@@ -124,7 +106,6 @@ def _require_every_field(schema: dict[str, Any]) -> dict[str, Any]:
 
 RESULT_JSON_SCHEMA = _require_every_field(SummaryResult.model_json_schema())
 OVERVIEW_JSON_SCHEMA = _require_every_field(ProjectOverview.model_json_schema())
-SUGGESTIONS_JSON_SCHEMA = _require_every_field(ProjectSuggestions.model_json_schema())
 RELATIONS_JSON_SCHEMA = _require_every_field(NoteRelations.model_json_schema())
 
 _CHARS_PER_TOKEN = 2.0
@@ -194,17 +175,12 @@ def overview_system_prompt(language: str) -> str:
     return OVERVIEW_SYSTEM_TEMPLATE.format(language=language)
 
 
-def suggestion_system_prompt(language: str) -> str:
-    return SUGGESTION_SYSTEM_TEMPLATE.format(language=language)
-
-
 def relation_system_prompt(language: str) -> str:
     return RELATION_SYSTEM_TEMPLATE.format(language=language)
 
 
-def overview_context(project: str, children: list[str]) -> str:
-    held = f" / projects inside it: {', '.join(children)}" if children else ""
-    return f"project: {project}{held}"
+def overview_context(project: str) -> str:
+    return f"project: {project}"
 
 
 class Recipe(NamedTuple):
@@ -227,10 +203,10 @@ def session_recipe(language: str, *, agent: str, project: str, device: str, back
     )
 
 
-def overview_recipe(language: str, *, project: str, children: list[str]) -> Recipe:
+def overview_recipe(language: str, *, project: str) -> Recipe:
     return Recipe(
         system=overview_system_prompt(language),
-        context=overview_context(project, children),
+        context=overview_context(project),
         single=OVERVIEW_SINGLE_INSTRUCTION,
         mapped=OVERVIEW_MAP_INSTRUCTION,
         reduced=OVERVIEW_REDUCE_INSTRUCTION,

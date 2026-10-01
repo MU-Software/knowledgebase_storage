@@ -26,6 +26,10 @@ const RUNTIME_FIELDS: Field<keyof RuntimeSetting>[] = [
   { key: 'overview_max_age_days', label: 'Rewrite overview after (days)', type: 'number' },
   { key: 'background_sweep_hours', label: 'Look for related projects every (h)', type: 'number' },
   { key: 'background_batch_size', label: 'Background jobs in flight', type: 'number' },
+  { key: 'display_timezone', label: 'Show times in', type: 'text' },
+  { key: 'verify_max_claims', label: 'Claims checked against git per note', type: 'number' },
+  { key: 'rebuild_batch_size', label: 'Rolling rebuild per sweep (0 is off)', type: 'number' },
+  { key: 'rebuild_max_age_days', label: 'Rebuild notes older than (days)', type: 'number' },
 ]
 
 const PROVIDER_FIELDS: Field<keyof LLMProvider | 'api_key'>[] = [
