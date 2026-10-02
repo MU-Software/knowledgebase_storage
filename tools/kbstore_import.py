@@ -12,6 +12,7 @@ import functools
 import hashlib
 import json
 import os
+import re
 import subprocess
 import sys
 import tarfile
@@ -30,6 +31,7 @@ SCRATCH_PARENTS = (Path.home() / "Documents" / "Codex", Path.home() / "Downloads
 CODEX_SESSION_PATTERNS = ("sessions/*/*/*/*.jsonl", "archived_sessions/*.jsonl")
 CHUNK_BYTES = int(os.environ.get("KBSTORE_CHUNK_BYTES", "1000000"))
 BLOB_LIMIT = "2m"
+GIT_TIMEOUT_SECONDS = 300
 
 
 def path_is_scratch(cwd: Path) -> bool:
@@ -235,6 +237,14 @@ class Client:
         done = self.read_post(f"/api/raw/uploads/{upload_id}/complete?digest={digest}")
         return upload_id if done is not None else None
 
+    def read_get(self, path: str) -> dict | None:
+        request = urllib.request.Request(f"{self.base}{path}", headers={**({"X-API-Key": self.api_key} if self.api_key else {})})
+        try:
+            with urllib.request.urlopen(request, timeout=60) as response:
+                return json.loads(response.read())
+        except (urllib.error.URLError, json.JSONDecodeError):
+            return None
+
     def read_post(self, path: str, payload: dict | None = None) -> dict | None:
         if self.dry_run:
             return {}
@@ -350,40 +360,97 @@ def import_raw(source: Source, client: Client, plan: Plan) -> tuple[int, int, in
     return sent, skipped, megabytes
 
 
-def import_git(client: Client, device: str, directories: set[str]) -> tuple[int, int]:
-    sent = skipped = 0
+def git_run(cwd: Path, *args: str, environment: dict[str, str] | None = None) -> tuple[bool, str]:
+    try:
+        done = subprocess.run(  # noqa: S603
+            ["git", *args],  # noqa: S607
+            cwd=cwd,
+            env=environment,
+            capture_output=True,
+            text=True,
+            timeout=GIT_TIMEOUT_SECONDS,
+            check=False,
+        )
+    except (OSError, subprocess.SubprocessError):
+        return False, ""
+    return done.returncode == 0, done.stdout.strip()
+
+
+def snapshot(client: Client, device: str, toplevel: Path, *, born: bool) -> bool | None:
+    listed, dirty = git_run(toplevel, "status", "--porcelain")
+    if not listed or not dirty:
+        return None
+    with tempfile.TemporaryDirectory() as scratch:
+        environment = {**os.environ, "GIT_INDEX_FILE": f"{scratch}/index"}
+        for args in (("read-tree", "HEAD") if born else ("read-tree", "--empty"), ("add", "-A")):
+            if not git_run(toplevel, *args, environment=environment)[0]:
+                return False
+        made, tree = git_run(toplevel, "write-tree", environment=environment)
+        parent = ["-p", "HEAD"] if born else []
+        made, commit = git_run(toplevel, "commit-tree", "--no-gpg-sign", tree, *parent, "-m", "kbstore worktree snapshot") if made else (False, "")
+        reference = f"refs/kbstore/snapshot/{re.sub(r'[^a-z0-9_-]+', '-', device.lower()).strip('-') or 'unknown'}"
+        if not made or not git_run(toplevel, "update-ref", reference, commit)[0]:
+            return False
+        bundle = Path(scratch) / "snapshot.bundle"
+        built, _ = git_run(
+            toplevel, "bundle", "create", bundle.as_posix(), f"--filter=blob:limit={BLOB_LIMIT}", f"HEAD..{reference}" if born else reference
+        )
+        git_run(toplevel, "update-ref", "-d", reference)
+        if not built:
+            return False
+        upload = client.upload("worktree", bundle.read_bytes())
+        body = {"upload_id": upload, "device": device, "path": toplevel.as_posix(), "snapshot": True}
+        return bool(upload) and (client.dry_run or client.read_post("/api/git/sources", body) is not None)
+
+
+def import_git(client: Client, device: str, directories: set[str]) -> tuple[int, int, int]:
+    sent = skipped = shots = 0
     for directory in sorted(directories):
         repo = Path(directory)
         if not repo.is_dir() or not _git(repo, "rev-parse", "--show-toplevel"):
             continue
         toplevel = Path(_git(repo, "rev-parse", "--show-toplevel") or directory)
-        bundle = Path(tempfile.gettempdir()) / f"kbstore-{abs(hash(toplevel.as_posix()))}.bundle"
-        bundle.unlink(missing_ok=True)
-        made = subprocess.run(  # noqa: S603
-            ["git", "bundle", "create", bundle.as_posix(), f"--filter=blob:limit={BLOB_LIMIT}", "--branches", "--tags", "HEAD"],  # noqa: S607
-            cwd=toplevel,
-            capture_output=True,
-            text=True,
-            check=False,
-        )
-        if made.returncode != 0 or not bundle.is_file():
-            sys.stderr.write(f"  ! bundle {toplevel} -> {made.stderr.strip()[:160]}\n")
+        born = git_run(toplevel, "rev-parse", "--verify", "--quiet", "HEAD")[0]
+        if born and not send_history(client, device, toplevel):
             skipped += 1
             continue
-        upload = client.upload("git_bundle", bundle.read_bytes())
-        body = {
-            "upload_id": upload,
-            "device": device,
-            "path": toplevel.as_posix(),
-            "remote": _git(toplevel, "remote", "get-url", "origin"),
-            "roots": (_git(toplevel, "rev-list", "--max-parents=0", "--all") or "").split(),
-        }
-        if upload and (client.dry_run or client.read_post("/api/git/sources", body) is not None):
-            sent += 1
-        else:
-            skipped += 1
-        bundle.unlink(missing_ok=True)
-    return sent, skipped
+        sent += born
+        taken = snapshot(client, device, toplevel, born=born)
+        if taken is False:
+            sys.stderr.write(f"  ! snapshot {toplevel}\n")
+        shots += taken is True
+    return sent, skipped, shots
+
+
+def send_history(client: Client, device: str, toplevel: Path) -> bool:
+    known = client.read_get("/api/git/sources?" + urllib.parse.urlencode({"device": device, "path": toplevel.as_posix()}))
+    tips = sorted({tip for tip in (known or {}).get("refs", {}).values() if git_run(toplevel, "cat-file", "-e", f"{tip}^{{commit}}")[0]})
+    heads = git_run(toplevel, "rev-parse", "--branches", "--tags", "HEAD")[1].split()
+    if heads and all(head in tips for head in heads):
+        return True
+    bundle = Path(tempfile.gettempdir()) / f"kbstore-{abs(hash(toplevel.as_posix()))}.bundle"
+    bundle.unlink(missing_ok=True)
+    revisions = ["--branches", "--tags", "HEAD", *[f"^{tip}" for tip in tips]]
+    made = subprocess.run(  # noqa: S603
+        ["git", "bundle", "create", bundle.as_posix(), f"--filter=blob:limit={BLOB_LIMIT}", *revisions],  # noqa: S607
+        cwd=toplevel,
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    if made.returncode != 0 or not bundle.is_file():
+        sys.stderr.write(f"  ! bundle {toplevel} -> {made.stderr.strip()[:160]}\n")
+        return False
+    upload = client.upload("git_bundle", bundle.read_bytes())
+    body = {
+        "upload_id": upload,
+        "device": device,
+        "path": toplevel.as_posix(),
+        "remote": _git(toplevel, "remote", "get-url", "origin"),
+        "roots": (_git(toplevel, "rev-list", "--max-parents=0", "--all") or "").split(),
+    }
+    bundle.unlink(missing_ok=True)
+    return bool(upload) and (client.dry_run or client.read_post("/api/git/sources", body) is not None)
 
 
 def map_projects(source: Source) -> dict[str, str]:
@@ -451,8 +518,8 @@ def main() -> int:
                     directories.add(session.cwd)
 
     if args.git:
-        sent, skipped = import_git(client, args.device, directories)
-        print(f"  git bundles     : {sent} sent, {skipped} skipped")
+        sent, skipped, shots = import_git(client, args.device, directories)
+        print(f"  git bundles     : {sent} sent, {skipped} skipped, {shots} worktree snapshots")
 
     return 0
 

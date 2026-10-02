@@ -283,7 +283,8 @@ def push_snapshot(fields: dict[str, str], repo: Path) -> None:
     index.parent.mkdir(parents=True, exist_ok=True)
     index.unlink(missing_ok=True)
     environment = {**os.environ, "GIT_INDEX_FILE": index.as_posix()}
-    for args in (("read-tree", "HEAD"), ("add", "-A")):
+    born = run_git(repo, "rev-parse", "--verify", "--quiet", "HEAD")[0]
+    for args in (("read-tree", "HEAD") if born else ("read-tree", "--empty"), ("add", "-A")):
         if not run_git(repo, *args, environment=environment)[0]:
             return
     written, tree = run_git(repo, "write-tree", environment=environment)
@@ -292,14 +293,15 @@ def push_snapshot(fields: dict[str, str], repo: Path) -> None:
     marker = STATE_DIR / "snapshots" / f"{slug_of(repo.as_posix())}.txt"
     if marker.is_file() and marker.read_text(encoding="utf-8").strip() == tree:
         return
-    made, commit = run_git(repo, "commit-tree", tree, "-p", "HEAD", "-m", "kbstore worktree snapshot", environment=environment)
+    parent = ["-p", "HEAD"] if born else []
+    made, commit = run_git(repo, "commit-tree", "--no-gpg-sign", tree, *parent, "-m", "kbstore worktree snapshot", environment=environment)
     if not made:
         return
 
     reference = f"refs/kbstore/snapshot/{slug_of(fields['device'])}"
     if not run_git(repo, "update-ref", reference, commit)[0]:
         return
-    bundle = bundle_of(repo, "snapshot", [f"HEAD..{reference}"])
+    bundle = bundle_of(repo, "snapshot", [f"HEAD..{reference}" if born else reference])
     upload = upload_file(bundle, "worktree") if bundle else None
     body = {"upload_id": upload, "device": fields["device"], "path": repo.as_posix(), "snapshot": True}
     if upload and call("POST", "/api/git/sources", body) is not None:

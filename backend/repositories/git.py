@@ -17,6 +17,7 @@ if TYPE_CHECKING:
 
 TIMEOUT_SECONDS = 120
 OUTPUT_CHARS = 6000
+EMPTY_TREE = "4b825dc642cb6eb9a060e54bf8d69288fbee4904"
 LISTED_FILES = 60
 ENVIRONMENT = {"GIT_NO_LAZY_FETCH": "1", "GIT_TERMINAL_PROMPT": "0", "PATH": "/usr/bin:/bin:/usr/local/bin"}
 PROMISOR_CONFIG = (
@@ -90,6 +91,9 @@ class GitRepository(RepositoryImpl):
     def snapshots(self, relative_path: str) -> list[str]:
         return sorted(self.refs(relative_path, "refs/snapshots").values())
 
+    def base_of(self, relative_path: str, ref: str) -> str:
+        return self.run(relative_path, "rev-parse", "--verify", "--quiet", f"{ref}^", check=False).strip() or EMPTY_TREE
+
     def roots(self, relative_path: str) -> list[str]:
         return sorted(set(self.run(relative_path, "rev-list", "--max-parents=0", "--all", check=False).split()))
 
@@ -103,7 +107,7 @@ class GitRepository(RepositoryImpl):
             rest = len(touched) - LISTED_FILES
             parts.append(f"files those commits touched ({len(touched)}):\n{shown}" + (f"\n… {rest} more" if rest > 0 else ""))
         for name in self.snapshots(relative_path):
-            stat = self.run(relative_path, "diff", "--stat", f"{name}^", name, check=False).strip()
+            stat = self.run(relative_path, "diff", "--stat", self.base_of(relative_path, name), name, check=False).strip()
             parts.append(f"uncommitted work captured in a snapshot:\n{stat}" if stat else "")
         return "\n\n".join(part for part in parts if part)
 

@@ -129,13 +129,16 @@ class GitService(ServiceImpl[GitRepository]):
         return self.repository.overview(network.relative_path), network.id
 
     def revision(self, where: str, rev: str) -> str:
-        return rev if rev and rev != "HEAD" else self.repository.tip(where)
+        if rev and rev != "HEAD":
+            return rev
+        return self.repository.tip(where) or next(iter(self.repository.snapshots(where)), "")
 
     def worktree(self, where: str, path: str) -> str:
         refs = self.repository.snapshots(where)
         if not refs:
             return "no snapshot of uncommitted work was uploaded for this repository"
-        shown = [self.repository.clipped(where, "diff", f"{ref}^", ref, "--", *([path] if path else [])).strip() for ref in refs]
+        scope = ["--", *([path] if path else [])]
+        shown = [self.repository.clipped(where, "diff", self.repository.base_of(where, ref), ref, *scope).strip() for ref in refs]
         return "\n\n".join(part for part in shown if part) or "the snapshot shows no uncommitted change"
 
     def read_file(self, where: str, payload: GitQuery) -> str:
