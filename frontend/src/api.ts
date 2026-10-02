@@ -103,15 +103,18 @@ export type ProjectDeleteResult = {
 
 export type Job = {
   id: string
-  kind: 'session' | 'memory_merge' | 'project_overview' | 'project_suggestion' | 'note_relations'
+  kind: 'session' | 'memory_merge' | 'project_overview' | 'project_link' | 'note_relations'
   status: 'pending' | 'claimed' | 'done' | 'failed'
   agent: string
   device: string
+  session_id: string
   project: string
   project_inference: string
   created_at: string
   last_activity_at: string
+  claimed_at: string | null
   claimed_by: string | null
+  heartbeat_at: string | null
   attempts: number
   last_error: string | null
   summarizer: string | null
@@ -239,7 +242,8 @@ export const api = {
   moveNote: (payload: NoteMove) => send<NoteMoved>('POST', '/wiki/notes/move', payload),
   note: (path: string) => get<NoteDetail>(`/wiki/notes/${path}`),
   search: (q: string) => get<NoteSummary[]>(`/wiki/search?q=${encodeURIComponent(q)}`),
-  jobs: ({ offset, limit }: { offset: number; limit: number }) => get<JobPage>(`/jobs?offset=${offset}&limit=${limit}`),
+  jobs: ({ offset, limit, status }: { offset: number; limit: number; status?: Job['status'] }) =>
+    get<JobPage>(`/jobs?offset=${offset}&limit=${limit}${status ? `&status=${status}` : ''}`),
   prompts: () => get<Prompt[]>('/prompts'),
   draftPrompt: (payload: Omit<Prompt, 'id' | 'status' | 'parent_id' | 'created_at' | 'updated_at'>) => send<Prompt>('POST', '/prompts', payload),
   amendPrompt: ({ id, patch }: { id: string; patch: Partial<Prompt> }) => send<Prompt>('PATCH', `/prompts/${id}`, patch),

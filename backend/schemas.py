@@ -253,6 +253,7 @@ class JobPublic(JobBase):
     last_activity_at: datetime
     claimed_at: datetime | None
     claimed_by: str | None
+    heartbeat_at: datetime | None
     attempts: int
     last_error: str | None
     summarizer: str | None
