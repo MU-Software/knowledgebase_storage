@@ -49,7 +49,7 @@ The server keeps the latest snapshot of a session and summarizes it after `job_i
 | `KBSTORE_UPLOAD_TIMEOUT` | `60` | Seconds per upload request |
 | `KBSTORE_BUNDLE_TIMEOUT` | `30` | Seconds allowed for each git command |
 | `KBSTORE_BLOB_LIMIT` | `2m` | Files larger than this are left out of the bundle |
-| `KBSTORE_CHUNK_BYTES` | `16777216` | Upload chunk size |
+| `KBSTORE_CHUNK_BYTES` | `1000000` | Upload chunk size; keep it under the proxy's request body limit |
 | `KBSTORE_FIRST_PUSH_LIMIT_KB` | `204800` | Skip the first git upload above this repository size |
 | `KBSTORE_MAX_MESSAGES` | `2000` | Send only the last N messages |
 | `KBSTORE_STATE_DIR` | `~/.cache/kbstore` | Remembers synced memory files, bundles and the last snapshot tree |

@@ -28,7 +28,7 @@ TEXT_BLOCK_TYPES = {"text", "input_text", "output_text"}
 NON_PROJECT_DIRS = {Path.home(), Path("/tmp"), Path("/var/tmp"), Path("/")}  # noqa: S108
 SCRATCH_PARENTS = (Path.home() / "Documents" / "Codex", Path.home() / "Downloads", Path.home() / "Desktop")
 CODEX_SESSION_PATTERNS = ("sessions/*/*/*/*.jsonl", "archived_sessions/*.jsonl")
-CHUNK_BYTES = 16 << 20
+CHUNK_BYTES = int(os.environ.get("KBSTORE_CHUNK_BYTES", "1000000"))
 BLOB_LIMIT = "2m"
 
 
@@ -319,6 +319,14 @@ def import_sessions(source: Source, client: Client, plan: Plan) -> tuple[int, in
     return sent, skipped, chars
 
 
+def send_in_chunks(client: Client, fields: dict[str, str], payload: bytes) -> bool:
+    for offset in range(0, max(len(payload), 1), CHUNK_BYTES):
+        query = urllib.parse.urlencode({**fields, "offset": offset})
+        if client.send_bytes("PUT", f"/api/raw/transcripts?{query}", payload[offset : offset + CHUNK_BYTES], "application/x-ndjson") is None:
+            return False
+    return True
+
+
 def import_raw(source: Source, client: Client, plan: Plan) -> tuple[int, int, int]:
     sent = skipped = megabytes = 0
     for name in source.glob(plan.pattern):
@@ -327,17 +335,14 @@ def import_raw(source: Source, client: Client, plan: Plan) -> tuple[int, int, in
             skipped += 1
             continue
         payload = source.read(name)
-        query = urllib.parse.urlencode(
-            {
-                "agent": session.agent,
-                "device": plan.device,
-                "session_id": session.session_id,
-                "project": project_of(session.cwd)[0],
-                "cwd": session.cwd or "",
-                "offset": 0,
-            }
-        )
-        if client.send_bytes("PUT", f"/api/raw/transcripts?{query}", payload, "application/x-ndjson") is None:
+        fields = {
+            "agent": session.agent,
+            "device": plan.device,
+            "session_id": session.session_id,
+            "project": project_of(session.cwd)[0],
+            "cwd": session.cwd or "",
+        }
+        if not send_in_chunks(client, fields, payload):
             skipped += 1
             continue
         sent += 1

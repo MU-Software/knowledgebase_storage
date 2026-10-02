@@ -24,7 +24,7 @@ TIMEOUT_SECONDS = float(os.environ.get("KBSTORE_TIMEOUT", "3"))
 UPLOAD_TIMEOUT_SECONDS = float(os.environ.get("KBSTORE_UPLOAD_TIMEOUT", "60"))
 BUNDLE_TIMEOUT_SECONDS = float(os.environ.get("KBSTORE_BUNDLE_TIMEOUT", "30"))
 BLOB_LIMIT = os.environ.get("KBSTORE_BLOB_LIMIT", "2m")
-CHUNK_BYTES = int(os.environ.get("KBSTORE_CHUNK_BYTES", str(16 << 20)))
+CHUNK_BYTES = int(os.environ.get("KBSTORE_CHUNK_BYTES", "1000000"))
 FIRST_PUSH_LIMIT_KB = int(os.environ.get("KBSTORE_FIRST_PUSH_LIMIT_KB", str(200 << 10)))
 MAX_MESSAGES = int(os.environ.get("KBSTORE_MAX_MESSAGES", "2000"))
 STATE_DIR = Path(os.environ.get("KBSTORE_STATE_DIR") or Path.home() / ".cache" / "kbstore")
@@ -172,15 +172,19 @@ def push_transcript(fields: dict[str, str], transcript: Path) -> None:
     size = transcript.stat().st_size
     if size == offset:
         return
-    with transcript.open("rb") as handle:
-        handle.seek(min(offset, size))
-        payload = handle.read()
+    if not send_transcript(fields, transcript, offset if offset <= size else 0) and offset:
+        send_transcript(fields, transcript, 0)
 
-    if size < offset:
-        offset, payload = 0, transcript.read_bytes()
-    query = transcript_query(fields, {"offset": offset})
-    if send_bytes("PUT", f"/api/raw/transcripts?{query}", payload, "application/x-ndjson") is None and offset:
-        send_bytes("PUT", f"/api/raw/transcripts?{transcript_query(fields, {'offset': 0})}", transcript.read_bytes(), "application/x-ndjson")
+
+def send_transcript(fields: dict[str, str], transcript: Path, offset: int) -> bool:
+    with transcript.open("rb") as handle:
+        handle.seek(offset)
+        while block := handle.read(CHUNK_BYTES):
+            query = transcript_query(fields, {"offset": offset})
+            if send_bytes("PUT", f"/api/raw/transcripts?{query}", block, "application/x-ndjson") is None:
+                return False
+            offset += len(block)
+    return True
 
 
 def upload_file(path: Path, kind: str) -> str | None:
