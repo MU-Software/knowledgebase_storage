@@ -62,10 +62,10 @@ def merged_into(source: Path, target: Path) -> None:
     shutil.rmtree(source)
 
 
-def derived(projects: Path, *, memories: bool) -> int:
+def derived(projects: Path, *, memories: bool) -> tuple[int, int]:
     if not projects.is_dir():
-        return 0
-    removed = 0
+        return 0, 0
+    removed = flattened = 0
     for path in sorted(projects.rglob("*"), key=lambda item: -len(item.parts)):
         kept = set(path.relative_to(projects).parts[:-1]) & set(MEMORY_NAMES)
         if path.exists() and not kept and path.name in DERIVED_NAMES + (MEMORY_NAMES if memories else ()):
@@ -74,10 +74,11 @@ def derived(projects: Path, *, memories: bool) -> int:
     for project in sorted(path for path in projects.iterdir() if path.is_dir()):
         for child in nested(project):
             merged_into(child, projects / child.name)
+            flattened += 1
     for project in sorted(path for path in projects.iterdir() if path.is_dir()):
         if not any(project.rglob("*.md")):
             shutil.rmtree(project)
-    return removed
+    return removed, flattened
 
 
 async def wipe(session: AsyncSession, *, decisions: bool, raw: bool, memories: bool) -> dict[str, int]:
@@ -114,7 +115,7 @@ def reset(
             await settings.async_engine.dispose()
 
     done = asyncio.run(main())
-    done["notes"] = derived(settings.notes_dir / PROJECTS_ROOT, memories=memories)
+    done["notes"], done["flattened"] = derived(settings.notes_dir / PROJECTS_ROOT, memories=memories)
     if raw:
         done["storage"] = sum(cleared(settings.storage_dir / name) for name in STORAGE_DIRS)
     typer.echo(", ".join(f"{name}: {count}" for name, count in done.items() if count))
