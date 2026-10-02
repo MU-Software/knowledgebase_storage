@@ -312,10 +312,14 @@ class JobRepository(DBRepositoryImpl[Job]):
 
     async def reclaim_stale(self, stale_after: timedelta) -> int:
         return await self.bulk_update(
-            and_(col(Job.status) == JobStatus.CLAIMED, col(Job.claimed_at) < datetime.now(UTC) - stale_after),
+            and_(
+                col(Job.status) == JobStatus.CLAIMED,
+                func.greatest(col(Job.claimed_at), col(Job.heartbeat_at)) < datetime.now(UTC) - stale_after,
+            ),
             status=JobStatus.PENDING,
             claimed_at=None,
             claimed_by=None,
+            claim_token=None,
         )
 
     async def purge_transcripts(self, retention: timedelta) -> int:

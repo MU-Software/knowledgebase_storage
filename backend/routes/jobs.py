@@ -129,6 +129,15 @@ async def submit_failure(
     return JobPublic.model_validate(await service.fail(job, payload.error), from_attributes=True)
 
 
+@router.post("/{job_id}/heartbeat", status_code=status.HTTP_204_NO_CONTENT)
+async def heartbeat(
+    job_id: UUID,
+    service: jobServiceDI,
+    token: Annotated[UUID, Query(description="claim token returned by /claim")],
+) -> None:
+    await service.heartbeat(await service.claim_held(job_id, token))
+
+
 @router.post("/{job_id}/release")
 async def release(
     job_id: UUID,

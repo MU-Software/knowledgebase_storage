@@ -141,6 +141,7 @@ class Job(UUIDMixin, TimestampMixin, JobBase, table=True):
     claimed_at: datetime | None = Field(default=None, sa_type=DateTime(timezone=True))
     claimed_by: str | None = None
     claim_token: UUID | None = None
+    heartbeat_at: datetime | None = Field(default=None, sa_type=DateTime(timezone=True))
     next_attempt_at: datetime | None = Field(default=None, sa_type=DateTime(timezone=True))
     attempts: int = 0
     last_error: str | None = None

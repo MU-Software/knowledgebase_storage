@@ -19,7 +19,7 @@ from backend.summarizers.base import Toolbox
 from backend.summarizers.session import MAX_VERIFIED, SessionPipeline
 
 if TYPE_CHECKING:
-    from collections.abc import Generator
+    from collections.abc import Coroutine, Generator
 
     from backend.schemas import LLMProviderResolved
 
@@ -27,6 +27,7 @@ logger = logging.getLogger(__name__)
 
 API_TIMEOUT_SECONDS = 60.0
 FALLBACK_POLL_SECONDS = 15.0
+HEARTBEAT_SECONDS = 300.0
 MAX_ERROR_LENGTH = 2000
 
 SlotKey = tuple[str, int]
@@ -317,7 +318,7 @@ async def process(api: AsyncClient, job: dict[str, Any], config: WorkerConfig, f
             logger.exception("failed to submit the result of job %s", job_id)
             return False
         if response.status_code == codes.CONFLICT:
-            logger.info("job %s was settled while it ran, so its result is dropped", job_id)
+            logger.warning("dropping the result of job %s: %s", job_id, response.text)
         else:
             logger.info("job %s done via %s", job_id, provider.name)
         return True
@@ -364,8 +365,29 @@ async def slot(api: AsyncClient, worker: str, key: SlotKey, cache: ConfigCache, 
         except Exception:
             logger.exception("%s failed to claim a job", provider.name)
 
-        if job is None or not await process(api, job, config, provider, gate):
+        if job is None or not await hold(api, job, process(api, job, config, provider, gate)):
             await asyncio.sleep(config.poll_interval_seconds)
+
+
+async def hold(api: AsyncClient, job: dict[str, Any], work: Coroutine[Any, Any, bool]) -> bool:
+    task = asyncio.create_task(work)
+    try:
+        while not (await asyncio.wait({task}, timeout=HEARTBEAT_SECONDS))[0]:
+            try:
+                response = await api.post(f"/api/jobs/{job['id']}/heartbeat", params={"token": job["claim_token"]})
+                if response.status_code != codes.CONFLICT:
+                    response.raise_for_status()
+            except Exception:
+                logger.exception("failed to send a heartbeat for job %s", job["id"])
+                continue
+            if response.status_code == codes.CONFLICT and not task.done():
+                logger.warning("abandoning job %s: %s", job["id"], response.text)
+                return True
+        return task.result()
+    finally:
+        task.cancel()
+        with suppress(asyncio.CancelledError):
+            await task
 
 
 async def supervise(api: AsyncClient, worker: str, cache: ConfigCache) -> None:

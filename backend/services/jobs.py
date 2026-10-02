@@ -103,7 +103,11 @@ class JobService(ServiceImpl[JobRepository]):
 
     def verify_claim(self, job: Job, token: UUID) -> None:
         if job.status is not JobStatus.CLAIMED or job.claim_token != token:
-            ClientError.STALE_CLAIM.format_msg(job_id=job.id).raise_()
+            ClientError.STALE_CLAIM.format_msg(job_id=job.id, status=job.status).raise_()
+
+    async def heartbeat(self, job: Job) -> Job:
+        job.heartbeat_at = datetime.now(UTC)
+        return await self.repository.save(job)
 
     async def release(self, job: Job, retry_after_seconds: int = 0) -> Job:
         job.status = JobStatus.PENDING

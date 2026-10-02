@@ -150,7 +150,7 @@ class ClientError(ErrorEnum):
 
     RESOURCE_NOT_FOUND = "The {resource} was not found."
     RESOURCE_ALREADY_EXISTS = "The {resource} already exists."
-    STALE_CLAIM = "Job {job_id} is no longer held by this claim."
+    STALE_CLAIM = "Job {job_id} is no longer held by this claim; it is {status} now."
     INVALID_NOTE_PATH = "A note path must stay inside the notes directory and end with .md: {path}"
     INVALID_PROJECT_MERGE = "A project cannot be merged into itself."
     INVALID_MEMORY_PATH = "Job {job_id} does not point at a memory file."
