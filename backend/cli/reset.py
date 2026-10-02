@@ -8,7 +8,7 @@ import typer
 from sqlalchemy import delete
 from sqlmodel import col
 
-from backend.consts.notes import ARCHIVE_DIR, LOG_DIR, MEMORY_DIR, OVERVIEW_FILE, PROJECTS_ROOT
+from backend.consts.notes import ARCHIVE_DIR, LOG_DIR, MEMORY_DIR, OVERVIEW_FILE, PROJECTS_ROOT, RESERVED_SEGMENTS
 from backend.models import GitNetwork, GitSource, Job, JobKind, NoteDecision, NotePin, ProjectAlias, ProjectEntry, ProjectLink, RawTranscript, Upload
 from backend.settings import get_settings
 
@@ -45,21 +45,38 @@ def cleared(directory: Path) -> int:
     return len(held)
 
 
+def nested(project: Path) -> list[Path]:
+    found: list[Path] = []
+    for child in sorted(path for path in project.iterdir() if path.is_dir() and path.name not in RESERVED_SEGMENTS):
+        found += [*nested(child), child]
+    return found
+
+
+def merged_into(source: Path, target: Path) -> None:
+    for path in sorted(item for item in source.rglob("*") if item.is_file()):
+        wanted = target / path.relative_to(source)
+        while wanted.exists():
+            wanted = wanted.with_name(f"{wanted.stem}.{source.parent.name}{wanted.suffix}")
+        wanted.parent.mkdir(parents=True, exist_ok=True)
+        shutil.move(path, wanted)
+    shutil.rmtree(source)
+
+
 def derived(projects: Path, *, memories: bool) -> int:
     if not projects.is_dir():
         return 0
     removed = 0
+    for path in sorted(projects.rglob("*"), key=lambda item: -len(item.parts)):
+        kept = set(path.relative_to(projects).parts[:-1]) & set(MEMORY_NAMES)
+        if path.exists() and not kept and path.name in DERIVED_NAMES + (MEMORY_NAMES if memories else ()):
+            shutil.rmtree(path) if path.is_dir() else path.unlink()
+            removed += 1
     for project in sorted(path for path in projects.iterdir() if path.is_dir()):
-        for name in DERIVED_NAMES + (MEMORY_NAMES if memories else ()):
-            target = project / name
-            if target.is_dir():
-                shutil.rmtree(target)
-                removed += 1
-            elif target.is_file():
-                target.unlink()
-                removed += 1
-        if not any(project.iterdir()):
-            project.rmdir()
+        for child in nested(project):
+            merged_into(child, projects / child.name)
+    for project in sorted(path for path in projects.iterdir() if path.is_dir()):
+        if not any(project.rglob("*.md")):
+            shutil.rmtree(project)
     return removed
 
 
