@@ -10,6 +10,7 @@ from __future__ import annotations
 import argparse
 import functools
 import hashlib
+import http.client
 import json
 import os
 import re
@@ -25,6 +26,7 @@ from collections.abc import Callable, Iterator
 from dataclasses import dataclass, field
 from pathlib import Path, PurePosixPath
 
+HTTP_ERRORS = (OSError, ValueError, http.client.HTTPException)
 TEXT_BLOCK_TYPES = {"text", "input_text", "output_text"}
 NON_PROJECT_DIRS = {Path.home(), Path("/tmp"), Path("/var/tmp"), Path("/")}  # noqa: S108
 SCRATCH_PARENTS = (Path.home() / "Documents" / "Codex", Path.home() / "Downloads", Path.home() / "Desktop")
@@ -168,6 +170,13 @@ def read_codex_session(source: Source, name: str) -> Session | None:
     return Session("codex", session_id, cwd, stamps[0], stamps[-1], messages)
 
 
+def reason_of(error: urllib.error.HTTPError) -> str:
+    try:
+        return error.read().decode(errors="replace")[:160]
+    except HTTP_ERRORS:
+        return ""
+
+
 def _git(cwd: Path, *args: str) -> str | None:
     try:
         out = subprocess.run(  # noqa: S603
@@ -217,9 +226,9 @@ class Client:
             with urllib.request.urlopen(request, timeout=600) as response:
                 return json.loads(response.read())
         except urllib.error.HTTPError as error:
-            sys.stderr.write(f"  ! {method} {path} -> {error.code} {error.read().decode()[:160]}\n")
+            sys.stderr.write(f"  ! {method} {path} -> {error.code} {reason_of(error)}\n")
             return None
-        except (OSError, ValueError) as error:
+        except HTTP_ERRORS as error:
             sys.stderr.write(f"  ! {method} {path} -> {error}\n")
             return None
 
@@ -242,7 +251,7 @@ class Client:
         try:
             with urllib.request.urlopen(request, timeout=60) as response:
                 return json.loads(response.read())
-        except (urllib.error.URLError, json.JSONDecodeError):
+        except HTTP_ERRORS:
             return None
 
     def read_post(self, path: str, payload: dict | None = None) -> dict | None:
@@ -258,9 +267,9 @@ class Client:
             with urllib.request.urlopen(request, timeout=600) as response:
                 return json.loads(response.read())
         except urllib.error.HTTPError as error:
-            sys.stderr.write(f"  ! POST {path} -> {error.code} {error.read().decode()[:160]}\n")
+            sys.stderr.write(f"  ! POST {path} -> {error.code} {reason_of(error)}\n")
             return None
-        except (OSError, ValueError) as error:
+        except HTTP_ERRORS as error:
             sys.stderr.write(f"  ! POST {path} -> {error}\n")
             return None
 
@@ -277,9 +286,9 @@ class Client:
             with urllib.request.urlopen(request, timeout=60) as response:
                 return response.status
         except urllib.error.HTTPError as error:
-            sys.stderr.write(f"  ! {method} {path} -> {error.code} {error.read().decode()[:160]}\n")
+            sys.stderr.write(f"  ! {method} {path} -> {error.code} {reason_of(error)}\n")
             return error.code
-        except OSError as error:
+        except HTTP_ERRORS as error:
             sys.stderr.write(f"  ! {method} {path} -> {error}\n")
             return 0
 
@@ -428,6 +437,10 @@ def send_history(client: Client, device: str, toplevel: Path) -> bool:
     heads = git_run(toplevel, "rev-parse", "--branches", "--tags", "HEAD")[1].split()
     if heads and all(head in tips for head in heads):
         return True
+    found, listed = git_run(toplevel, "rev-list", "--max-parents=0", "--exclude=refs/kbstore/*", "--all")
+    if not found:
+        sys.stderr.write(f"  ! roots {toplevel} -> git rev-list failed; not registered\n")
+        return False
     bundle = Path(tempfile.gettempdir()) / f"kbstore-{abs(hash(toplevel.as_posix()))}.bundle"
     bundle.unlink(missing_ok=True)
     revisions = ["--branches", "--tags", "HEAD", *[f"^{tip}" for tip in tips]]
@@ -441,16 +454,20 @@ def send_history(client: Client, device: str, toplevel: Path) -> bool:
     if made.returncode != 0 or not bundle.is_file():
         sys.stderr.write(f"  ! bundle {toplevel} -> {made.stderr.strip()[:160]}\n")
         return False
-    upload = client.upload("git_bundle", bundle.read_bytes())
+    try:
+        upload = client.upload("git_bundle", bundle.read_bytes())
+    finally:
+        bundle.unlink(missing_ok=True)
+    if not upload:
+        return False
     body = {
         "upload_id": upload,
         "device": device,
         "path": toplevel.as_posix(),
         "remote": _git(toplevel, "remote", "get-url", "origin"),
-        "roots": (_git(toplevel, "rev-list", "--max-parents=0", "--all") or "").split(),
+        "roots": listed.split(),
     }
-    bundle.unlink(missing_ok=True)
-    return bool(upload) and (client.dry_run or client.read_post("/api/git/sources", body) is not None)
+    return client.dry_run or client.read_post("/api/git/sources", body) is not None
 
 
 def map_projects(source: Source) -> dict[str, str]:

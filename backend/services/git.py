@@ -56,21 +56,22 @@ class GitService(ServiceImpl[GitRepository]):
         absent = await self.blobs.incomplete([file.digest for file in payload.files])
         source, _ = await self.source_of(payload.device, payload.path, payload.roots, payload.remote)
         held = {file.path: file for file in await self.files.list_by_source(source.id)}
-        previous = {file.digest for file in held.values()}
-        kept, skipped = [], []
+        changed, replaced, skipped = [], set(), []
         for reported in payload.files:
-            file = held.get(reported.path)
             if reported.digest in absent:
                 skipped.append(reported.path)
-            elif file is None:
-                file = WorktreeFile(source_id=source.id, **reported.model_dump())
-            else:
-                file.digest, file.byte_size, file.modified_at = reported.digest, reported.byte_size, reported.modified_at
-            if file is not None:
-                kept.append(file)
-        await self.files.replace(source.id, kept)
-        await self.blobs.release(previous - {file.digest for file in kept})
-        return WorktreeFilesState(source_id=source.id, files=len(kept), skipped=skipped)
+                continue
+            file = held.get(reported.path)
+            if file is None:
+                changed.append(WorktreeFile(source_id=source.id, **reported.model_dump()))
+                continue
+            if file.digest != reported.digest:
+                replaced.add(file.digest)
+            file.digest, file.byte_size, file.modified_at = reported.digest, reported.byte_size, reported.modified_at
+            changed.append(file)
+        await self.files.save_all(changed)
+        await self.blobs.release(replaced)
+        return WorktreeFilesState(source_id=source.id, files=len(changed), skipped=skipped)
 
     async def large_files(self, network_id: UUID) -> dict[str, tuple[WorktreeFile, str]]:
         newest: dict[str, tuple[WorktreeFile, str]] = {}

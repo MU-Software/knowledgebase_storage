@@ -4,7 +4,6 @@ from typing import TYPE_CHECKING, Annotated
 from uuid import uuid4
 
 from fastapi import Depends
-from sqlalchemy import delete
 from sqlalchemy.dialects.postgresql import insert
 from sqlmodel import col, select
 
@@ -54,10 +53,8 @@ class WorktreeFileRepository(DBRepositoryImpl[WorktreeFile]):
         )
         return (await self.session.exec(query)).all()
 
-    async def replace(self, source_id: UUID, files: list[WorktreeFile]) -> None:
+    async def save_all(self, files: list[WorktreeFile]) -> None:
         self.session.add_all(files)
-        query = delete(WorktreeFile).where(col(WorktreeFile.source_id) == source_id, col(WorktreeFile.path).not_in([file.path for file in files]))
-        await self.session.exec(query)
         await self.session.commit()
 
     async def referenced(self, digests: list[str]) -> set[str]:

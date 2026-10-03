@@ -41,6 +41,8 @@ KBSTORE_API_BASE=... KBSTORE_API_KEY=... kbstore_hook.py install-service
 
 Run it again after changing any `KBSTORE_*` variable. `kbstore_hook.py serve` runs the uploader in the foreground.
 
+- macOS asks once whether the service's Python may read repositories under `~/Documents`, `~/Desktop`, `~/Downloads` or iCloud Drive. It asks again after the Python is upgraded. If you deny it, those files are retried later and the server keeps what it last received.
+
 ## Codex
 
 `~/.codex/hooks.json` takes the same entries. Trust them with `/hooks` after every change, or Codex skips them.

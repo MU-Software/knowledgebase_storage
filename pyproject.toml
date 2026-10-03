@@ -47,6 +47,7 @@ disable_error_code = ["call-overload"]
 [tool.ruff]
 line-length = 150
 target-version = "py313"
+per-file-target-version = { "hooks/*.py" = "py38" }
 
 [tool.ruff.lint]
 select = [
@@ -89,5 +90,6 @@ classmethod-decorators = ["classmethod", "pydantic.field_validator"]
 "backend/alembic/*" = ["ANN401", "ARG001", "E402", "INP001", "TC001", "TC002", "TC003"]
 "backend/models.py" = ["ANN401"]
 "tools/*" = ["S310", "SIM115", "T201", "TC003"]
+"hooks/*" = ["PERF203"]
 "backend/routes/*" = ["TC001", "TC002", "TC003"]
 "backend/dependencies/*" = ["TC001", "TC002", "TC003"]

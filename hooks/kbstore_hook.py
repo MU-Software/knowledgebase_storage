@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import contextlib
 import hashlib
+import http.client
 import json
 import os
 import plistlib
@@ -15,7 +16,6 @@ import stat
 import subprocess
 import sys
 import time
-import urllib.error
 import urllib.parse
 import urllib.request
 from datetime import datetime, timezone
@@ -46,6 +46,11 @@ SCRATCH_PARENTS = (Path.home() / "Documents" / "Codex", Path.home() / "Downloads
 TEXT_BLOCK_TYPES = {"text", "input_text", "output_text"}
 ROLES = {"user", "assistant"}
 HOOK_ERRORS = (OSError, ValueError, KeyError, TypeError)
+HTTP_ERRORS = (OSError, ValueError, http.client.HTTPException)
+SERVICE_SECONDS = 20
+HOOK_GIT_SECONDS = 5
+NOTICED: set[str] = set()
+LAUNCHD_UNSUPPORTED = 125
 SERVICE_NAME = "kbstore-uploader"
 DIGEST_BATCH = 2000
 STALE_SECONDS = 3600
@@ -76,7 +81,7 @@ def _git(cwd: Path, *args: str) -> str | None:
 def infer_project(cwd: Path) -> tuple[str, str]:
     if remote := _git(cwd, "remote", "get-url", "origin"):
         name = remote.rstrip("/").rsplit("/", 1)[-1]
-        return name.removesuffix(".git"), "remote"
+        return name[: -len(".git")] if name.endswith(".git") else name, "remote"
 
     if toplevel := _git(cwd, "rev-parse", "--show-toplevel"):
         return Path(toplevel).name, "worktree"
@@ -151,7 +156,7 @@ def call(method: str, path: str, payload: dict | None = None, timeout: float = T
     try:
         with urllib.request.urlopen(request, timeout=timeout) as response:  # noqa: S310
             return json.loads(response.read())
-    except (urllib.error.URLError, OSError, TimeoutError, ValueError):
+    except HTTP_ERRORS:
         return None
 
 
@@ -165,7 +170,7 @@ def send_bytes(method: str, path: str, payload: bytes, content_type: str) -> obj
     try:
         with urllib.request.urlopen(request, timeout=UPLOAD_TIMEOUT_SECONDS) as response:  # noqa: S310
             return json.loads(response.read())
-    except (urllib.error.URLError, OSError, TimeoutError, ValueError):
+    except HTTP_ERRORS:
         return None
 
 
@@ -236,7 +241,9 @@ def bundle_of(cwd: Path, name: str, revisions: list[str]) -> Path | None:
 
 
 def small_enough(repo: Path) -> bool:
-    counted = _git(repo, "count-objects", "-v") or ""
+    found, counted = run_git(repo, "count-objects", "-v", timeout=HOOK_GIT_SECONDS)
+    if not found:
+        return False
     sizes = dict(line.split(": ", 1) for line in counted.splitlines() if ": " in line)
     try:
         total = int(sizes.get("size-pack", "0")) + int(sizes.get("size", "0"))
@@ -266,11 +273,26 @@ def write_json(target: Path, data: object) -> None:
 
 
 def queue_large_files(fields: dict[str, str], repo: Path, names: list[str]) -> None:
-    key = f"{slug_of(repo.as_posix())}-{hashlib.sha256(repo.as_posix().encode()).hexdigest()[:8]}.json"
     names = [name for name in names if name.encode(errors="surrogateescape").decode(errors="replace") == name]
-    if not names and not (STATE_DIR / "large" / key).is_file() and not (STATE_DIR / "pending" / key).is_file():
+    key = f"{slug_of(repo.as_posix())}-{hashlib.sha256(repo.as_posix().encode()).hexdigest()[:8]}.json"
+    if not names:
+        (STATE_DIR / "pending" / key).unlink(missing_ok=True)
         return
     write_json(STATE_DIR / "pending" / key, {"device": fields["device"], "path": repo.as_posix(), "files": names, "touched": time.time()})
+
+
+def push_history(fields: dict[str, str], repo: Path, tips: list[str], *, registered: bool) -> bool | None:
+    roots = roots_of(repo, HOOK_GIT_SECONDS)
+    if roots is None and not registered:
+        return None
+    bundle = bundle_of(repo, "history", ["--branches", "--tags", "HEAD", *[f"^{tip}" for tip in tips]])
+    upload = upload_file(bundle, "git_bundle") if bundle else None
+    if bundle:
+        bundle.unlink(missing_ok=True)
+    if not upload:
+        return False
+    body = {"upload_id": upload, "device": fields["device"], "path": repo.as_posix(), "remote": _git(repo, "remote", "get-url", "origin")}
+    return call("POST", "/api/git/sources", {**body, "roots": roots or []}) is not None
 
 
 def push_git(fields: dict[str, str], cwd: Path) -> None:
@@ -286,35 +308,29 @@ def push_git(fields: dict[str, str], cwd: Path) -> None:
     if large is not None:
         queue_large_files(fields, repo, large)
     known = call("GET", "/api/git/sources?" + urllib.parse.urlencode({"device": fields["device"], "path": repo.as_posix()}))
-    every = sorted(set(known.get("refs", {}).values())) if isinstance(known, dict) else []
+    registered = isinstance(known, dict)
+    every = sorted(set(known.get("refs", {}).values())) if registered else []
     heads = (_git(repo, "rev-parse", "--branches", "--tags", "HEAD") or "").split()
-    if (not isinstance(known, dict) or (heads and not every)) and not small_enough(repo):
+    if (not registered or (heads and not every)) and not small_enough(repo):
         return
 
     tips = [tip for tip in every if run_git(repo, "cat-file", "-e", f"{tip}^{{commit}}")[0]]
-    if any(head not in tips for head in heads):
-        revisions = ["--branches", "--tags", "HEAD", *[f"^{tip}" for tip in tips]]
-        bundle = bundle_of(repo, "history", revisions)
-        upload = upload_file(bundle, "git_bundle") if bundle else None
-        if bundle:
-            bundle.unlink(missing_ok=True)
-        if upload:
-            call(
-                "POST",
-                "/api/git/sources",
-                {
-                    "upload_id": upload,
-                    "device": fields["device"],
-                    "path": repo.as_posix(),
-                    "remote": _git(repo, "remote", "get-url", "origin"),
-                    "roots": (_git(repo, "rev-list", "--max-parents=0", "--all") or "").split(),
-                },
-            )
-    if large is not None:
+    current = all(head in tips for head in heads)
+    if not current:
+        current = push_history(fields, repo, tips, registered=registered)
+        if current is None:
+            return
+    if large is not None and current:
         push_snapshot(fields, repo, large)
 
 
-def run_git(repo: Path, *args: str, environment: dict[str, str] | None = None, given: str | None = None) -> tuple[bool, str]:
+def run_git(
+    repo: Path,
+    *args: str,
+    environment: dict[str, str] | None = None,
+    given: str | None = None,
+    timeout: float = BUNDLE_TIMEOUT_SECONDS,
+) -> tuple[bool, str]:
     try:
         done = subprocess.run(  # noqa: S603
             ["git", *args],  # noqa: S607
@@ -324,12 +340,17 @@ def run_git(repo: Path, *args: str, environment: dict[str, str] | None = None, g
             capture_output=True,
             encoding="utf-8",
             errors="surrogateescape",
-            timeout=BUNDLE_TIMEOUT_SECONDS,
+            timeout=timeout,
             check=False,
         )
     except (OSError, subprocess.SubprocessError):
         return False, ""
     return done.returncode == 0, done.stdout.rstrip("\n")
+
+
+def roots_of(repo: Path, timeout: float = BUNDLE_TIMEOUT_SECONDS) -> list[str] | None:
+    found, listed = run_git(repo, "rev-list", "--max-parents=0", "--exclude=refs/kbstore/*", "--all", timeout=timeout)
+    return listed.split() if found else None
 
 
 def stage_worktree(repo: Path, index: Path, large: list[str], *, born: bool, seeded: bool) -> str | None:
@@ -377,15 +398,18 @@ def push_snapshot(fields: dict[str, str], repo: Path, large: list[str]) -> None:
         reference = f"refs/kbstore/snapshot/{slug_of(fields['device'])}"
         if not run_git(repo, "update-ref", reference, commit)[0]:
             return
-        bundle = bundle_of(repo, "snapshot", [f"HEAD..{reference}" if born else reference])
-        upload = upload_file(bundle, "worktree") if bundle else None
-        if bundle:
-            bundle.unlink(missing_ok=True)
-        body = {"upload_id": upload, "device": fields["device"], "path": repo.as_posix(), "snapshot": True}
-        if upload and call("POST", "/api/git/sources", body) is not None:
-            marker.parent.mkdir(parents=True, exist_ok=True)
-            marker.write_text(tree, encoding="utf-8")
-        run_git(repo, "update-ref", "-d", reference)
+        bundle = None
+        try:
+            bundle = bundle_of(repo, "snapshot", [f"HEAD..{reference}" if born else reference])
+            upload = upload_file(bundle, "worktree") if bundle else None
+            body = {"upload_id": upload, "device": fields["device"], "path": repo.as_posix(), "snapshot": True}
+            if upload and call("POST", "/api/git/sources", body) is not None:
+                marker.parent.mkdir(parents=True, exist_ok=True)
+                marker.write_text(tree, encoding="utf-8")
+        finally:
+            run_git(repo, "update-ref", "-d", reference)
+            if bundle:
+                bundle.unlink(missing_ok=True)
     finally:
         index.unlink(missing_ok=True)
         index.with_name(f"{index.name}.pathspecs").unlink(missing_ok=True)
@@ -545,8 +569,24 @@ def send_blob(path: Path, printed: dict) -> bool | None:
     return call("POST", f"/api/blobs/{printed['digest']}/complete", None, UPLOAD_TIMEOUT_SECONDS + size / (100 << 20)) is not None
 
 
-def upload_large_files(entry: dict, previous: dict[str, dict]) -> list[dict]:
-    repo, files = Path(entry["path"]), []
+def notice(subject: str, message: str) -> None:
+    if subject not in NOTICED:
+        NOTICED.add(subject)
+        sys.stdout.write(f"{datetime.now(timezone.utc).isoformat()} {subject}: {message}\n")
+
+
+def vanished(path: str) -> bool:
+    try:
+        Path(path).lstat()
+    except (FileNotFoundError, NotADirectoryError):
+        return True
+    except OSError:
+        pass
+    return False
+
+
+def upload_large_files(entry: dict) -> tuple[list[dict], bool]:
+    repo, files, waiting = Path(entry["path"]), [], False
     store = STATE_DIR / "fingerprints.json"
     try:
         cache = json.loads(store.read_text(encoding="utf-8"))
@@ -555,60 +595,62 @@ def upload_large_files(entry: dict, previous: dict[str, dict]) -> list[dict]:
     try:
         for name in entry["files"]:
             target = repo / name
-            if not target.is_file():
-                continue
             try:
+                info = target.lstat()
+                if not stat.S_ISREG(info.st_mode) or info.st_size < BLOB_LIMIT_BYTES:
+                    continue
                 printed = fingerprint(target, cache)
                 sent = None if printed is None else send_blob(target, printed)
-            except OSError:
-                printed, sent = None, None
-            if printed is None or sent is None:
+            except (FileNotFoundError, NotADirectoryError):
+                continue
+            except OSError as exc:
+                notice(target.as_posix(), f"{exc.strerror or exc}, trying again later")
+                printed, sent = None, False
+            if sent is None:
                 cache.pop(target.as_posix(), None)
             if printed is None or not sent:
-                entry["touched"] = time.time()
-                if name in previous:
-                    files.append(previous[name])
+                waiting = True
                 continue
-            modified = datetime.fromtimestamp(printed["seen"][1] / 1e9, timezone.utc).isoformat()  # noqa: UP017
+            modified = datetime.fromtimestamp(printed["seen"][1] / 1e9, timezone.utc).isoformat()
             files.append({"path": name, "digest": printed["digest"], "byte_size": printed["seen"][0], "modified_at": modified})
-            sys.stdout.write(f"{datetime.now(timezone.utc).isoformat()} {target} {printed['digest'][:12]}\n")  # noqa: UP017
+            NOTICED.discard(target.as_posix())
+            sys.stdout.write(f"{datetime.now(timezone.utc).isoformat()} {target} {printed['digest'][:12]}\n")
     finally:
-        kept = {key: value for key, value in cache.items() if Path(key).is_file()}
-        write_json(store, kept)
-    return files
+        write_json(store, {key: value for key, value in cache.items() if not vanished(key)})
+    return files, waiting
+
+
+def entry_of(pending: Path) -> dict | None:
+    try:
+        entry = json.loads(pending.read_text(encoding="utf-8"))
+    except ValueError:
+        return None
+    shaped = isinstance(entry, dict) and all(isinstance(entry.get(key), str) for key in ("device", "path"))
+    shaped = shaped and isinstance(entry.get("files"), list) and all(isinstance(name, str) for name in entry["files"])
+    return entry if shaped and isinstance(entry.get("touched"), (int, float)) else None
 
 
 def settle(pending: Path) -> None:
-    entry = json.loads(pending.read_text(encoding="utf-8"))
-    touched = entry["touched"]
+    entry = entry_of(pending)
+    if entry is None:
+        notice(pending.name, "unreadable entry dropped")
+        pending.unlink(missing_ok=True)
+        return
+    touched = float(entry["touched"])
     if time.time() - max(touched, pending.stat().st_mtime) < IDLE_SECONDS:
         return
-    reported = STATE_DIR / "large" / pending.name
-    previous = {file["path"]: file for file in json.loads(reported.read_text(encoding="utf-8"))} if reported.is_file() else {}
-    files = upload_large_files(entry, previous)
-    if files or previous:
+    files, waiting = upload_large_files(entry)
+    if files:
         repo = Path(entry["path"])
-        body = {
-            "device": entry["device"],
-            "path": entry["path"],
-            "remote": _git(repo, "remote", "get-url", "origin"),
-            "roots": (_git(repo, "rev-list", "--max-parents=0", "--all") or "").split(),
-            "files": files,
-        }
-        answer = call("PUT", "/api/git/worktree-files", body, UPLOAD_TIMEOUT_SECONDS)
-        if not isinstance(answer, dict):
-            return
-        skipped = set(answer.get("skipped", []))
-        if skipped:
-            entry["touched"] = time.time()
-        recorded = [previous.get(file["path"]) if file["path"] in skipped else file for file in files]
-        if recorded := [file for file in recorded if file]:
-            write_json(reported, recorded)
-        else:
-            reported.unlink(missing_ok=True)
-    if entry["touched"] != touched:
+        roots = roots_of(repo)
+        if roots is None:
+            notice(repo.as_posix(), "git cannot list its root commits, trying again later")
+        body = {"device": entry["device"], "path": entry["path"], "remote": _git(repo, "remote", "get-url", "origin"), "roots": roots, "files": files}
+        answer = call("PUT", "/api/git/worktree-files", body, UPLOAD_TIMEOUT_SECONDS) if roots is not None else None
+        waiting = waiting or not isinstance(answer, dict) or bool(answer.get("skipped"))
+    if waiting:
         os.utime(pending)
-    elif json.loads(pending.read_text(encoding="utf-8"))["touched"] == touched:
+    elif float(json.loads(pending.read_text(encoding="utf-8"))["touched"]) == touched:
         pending.unlink()
 
 
@@ -617,13 +659,23 @@ def serve() -> None:
     lock = (STATE_DIR / "uploader.lock").open("w")
     import fcntl
 
-    fcntl.flock(lock, fcntl.LOCK_EX)
     script = Path(__file__).resolve()
     started = script.stat().st_mtime_ns
-    while script.stat().st_mtime_ns == started:
-        for pending in sorted((STATE_DIR / "pending").glob("*.json")):
-            with contextlib.suppress(*HOOK_ERRORS):
+    fcntl.flock(lock, fcntl.LOCK_EX)
+    while True:
+        try:
+            current = script.stat().st_mtime_ns
+        except OSError:
+            current = None
+        if current not in (started, None):
+            break
+        for pending in sorted((STATE_DIR / "pending").glob("*.json")) if current else []:
+            try:
                 settle(pending)
+            except Exception as exc:  # noqa: BLE001
+                sys.stdout.write(f"{datetime.now(timezone.utc).isoformat()} {pending.name}: {exc!r}\n")
+                with contextlib.suppress(OSError):
+                    os.utime(pending)
         sys.stdout.flush()
         time.sleep(POLL_SECONDS)
     lock.close()
@@ -637,23 +689,43 @@ def write_private(target: Path, payload: bytes) -> None:
         handle.write(payload)
 
 
-def install_service() -> int:
-    script = Path(__file__).resolve()
-    arguments = [sys.executable, script.as_posix(), "serve"]
-    environment = {key: value for key, value in os.environ.items() if key.startswith("KBSTORE_")} | {"PATH": os.environ.get("PATH", "/usr/bin:/bin")}
-    log = (STATE_DIR / "uploader.log").as_posix()
-    STATE_DIR.mkdir(parents=True, exist_ok=True)
-    if sys.platform == "darwin":
-        target = Path.home() / "Library" / "LaunchAgents" / f"{SERVICE_NAME}.plist"
-        service = {"Label": SERVICE_NAME, "ProgramArguments": arguments, "EnvironmentVariables": environment, "RunAtLoad": True, "KeepAlive": True}
-        write_private(target, plistlib.dumps({**service, "ProcessType": "Background", "StandardOutPath": log, "StandardErrorPath": log}))
-        domain = f"gui/{os.getuid()}"
-        subprocess.run(["launchctl", "bootout", f"{domain}/{SERVICE_NAME}"], capture_output=True, check=False)  # noqa: S603, S607
+def install_launchd(arguments: list[str], environment: dict[str, str], log: str) -> int:
+    target = Path.home() / "Library" / "LaunchAgents" / f"{SERVICE_NAME}.plist"
+    service = {"Label": SERVICE_NAME, "ProgramArguments": arguments, "EnvironmentVariables": environment, "RunAtLoad": True, "KeepAlive": True}
+    domains = {f"gui/{os.getuid()}": "Aqua", f"user/{os.getuid()}": "Background"}
+    for domain in domains:
+        subprocess.run(["launchctl", "bootout", f"{domain}/{SERVICE_NAME}"], capture_output=True, timeout=SERVICE_SECONDS, check=False)  # noqa: S603, S607
+    failures = []
+    for domain, session in domains.items():
+        sessions = {"LimitLoadToSessionType": session, "ProcessType": "Background"}
+        write_private(target, plistlib.dumps({**service, **sessions, "StandardOutPath": log, "StandardErrorPath": log}))
         for _ in range(10):
-            if subprocess.run(["launchctl", "bootstrap", domain, target.as_posix()], capture_output=True, check=False).returncode == 0:  # noqa: S603, S607
+            done = subprocess.run(  # noqa: S603
+                ["launchctl", "bootstrap", domain, target.as_posix()],  # noqa: S607
+                capture_output=True,
+                text=True,
+                timeout=SERVICE_SECONDS,
+                check=False,
+            )
+            if done.returncode == 0:
+                if session == "Background":
+                    sys.stderr.write(
+                        "Installed for the background session only. Run install-service again from a GUI terminal so it starts at login.\n"
+                    )
                 return 0
+            if done.returncode == LAUNCHD_UNSUPPORTED:
+                break
             time.sleep(1)
-        return 1
+        failures.append(f"{domain}: {(done.stderr or done.stdout).strip()}")
+        if done.returncode != LAUNCHD_UNSUPPORTED:
+            break
+    sys.stderr.write(
+        "launchctl bootstrap failed\n" + "\n".join(failures) + "\nCheck that it is allowed under System Settings > General > Login Items.\n"
+    )
+    return 1
+
+
+def install_systemd(arguments: list[str], environment: dict[str, str], log: str) -> int:
     target = Path.home() / ".config" / "systemd" / "user" / f"{SERVICE_NAME}.service"
     escaped = {key: value.replace("\\", "\\\\").replace('"', '\\"').replace("%", "%%") for key, value in environment.items()}
     settings = [f"ExecStart={shlex.join(arguments).replace('%', '%%')}", *(f'Environment="{key}={value}"' for key, value in escaped.items())]
@@ -661,9 +733,33 @@ def install_service() -> int:
     unit = ["[Unit]", "Description=kbstore large file uploader", "", "[Service]", *settings, *output, "", "[Install]", "WantedBy=default.target"]
     write_private(target, ("\n".join(unit) + "\n").encode())
     for command in (["daemon-reload"], ["enable", SERVICE_NAME], ["restart", SERVICE_NAME]):
-        if subprocess.run(["systemctl", "--user", *command], check=False).returncode != 0:  # noqa: S603, S607
+        if subprocess.run(["systemctl", "--user", *command], timeout=SERVICE_SECONDS, check=False).returncode != 0:  # noqa: S603, S607
+            sys.stderr.write(f"systemctl --user {' '.join(command)} failed; run install-service from a login session of this user.\n")
             return 1
+    with contextlib.suppress(OSError, subprocess.SubprocessError):
+        lingering = subprocess.run(  # noqa: S603
+            ["loginctl", "show-user", str(os.getuid()), "--property=Linger", "--value"],  # noqa: S607
+            capture_output=True,
+            text=True,
+            timeout=SERVICE_SECONDS,
+            check=False,
+        )
+        if lingering.stdout.strip() == "no":
+            sys.stderr.write("The service stops when you log out. Run `loginctl enable-linger` once to keep it running.\n")
     return 0
+
+
+def install_service() -> int:
+    script = Path(__file__).resolve()
+    arguments = [sys.executable, script.as_posix(), "serve"]
+    environment = {**{key: value for key, value in os.environ.items() if key.startswith("KBSTORE_")}, "PATH": os.environ.get("PATH", "/usr/bin:/bin")}
+    STATE_DIR.mkdir(parents=True, exist_ok=True)
+    log = (STATE_DIR / "uploader.log").as_posix()
+    try:
+        return (install_launchd if sys.platform == "darwin" else install_systemd)(arguments, environment, log)
+    except (OSError, subprocess.SubprocessError) as exc:
+        sys.stderr.write(f"could not install the service: {exc}\n")
+        return 1
 
 
 def main() -> int:

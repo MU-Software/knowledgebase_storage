@@ -239,7 +239,7 @@ class WorktreeFilesRequest(BaseModel):
     path: str
     remote: str | None = None
     roots: list[str] = Field(default_factory=list)
-    files: list[WorktreeFileReport] = Field(description="every large file the worktree holds now; files left out are forgotten")
+    files: list[WorktreeFileReport] = Field(description="large files read in this pass; files left out keep what was last reported")
 
     @field_validator("files")
     @classmethod
