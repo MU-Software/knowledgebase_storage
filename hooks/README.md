@@ -31,6 +31,16 @@ uncommitted work. A repository the server has never seen is uploaded whole only 
 
 `SessionStart` downloads the project's memory and adds the project's recent kb records to the context.
 
+## Large files
+
+Files over `KBSTORE_BLOB_LIMIT` are uploaded by a per-machine service once the repository is idle:
+
+```sh
+KBSTORE_API_BASE=... KBSTORE_API_KEY=... kbstore_hook.py install-service
+```
+
+Run it again after changing any `KBSTORE_*` variable. `kbstore_hook.py serve` runs the uploader in the foreground.
+
 ## Codex
 
 `~/.codex/hooks.json` takes the same entries. Trust them with `/hooks` after every change, or Codex skips them.
@@ -48,11 +58,12 @@ The server keeps the latest snapshot of a session and summarizes it after `job_i
 | `KBSTORE_TIMEOUT` | `3` | Seconds per small request. Short, so the hook never holds the session |
 | `KBSTORE_UPLOAD_TIMEOUT` | `60` | Seconds per upload request |
 | `KBSTORE_BUNDLE_TIMEOUT` | `30` | Seconds allowed for each git command |
-| `KBSTORE_BLOB_LIMIT` | `2m` | Files larger than this are left out of the bundle |
+| `KBSTORE_BLOB_LIMIT` | `2m` | Files larger than this are left out of the bundle and uploaded by the service |
+| `KBSTORE_IDLE_SECONDS` | `1200` | The service uploads large files this long after the last conversation |
 | `KBSTORE_CHUNK_BYTES` | `1000000` | Upload chunk size; keep it under the proxy's request body limit |
 | `KBSTORE_FIRST_PUSH_LIMIT_KB` | `204800` | Skip the first git upload above this repository size |
 | `KBSTORE_MAX_MESSAGES` | `2000` | Send only the last N messages |
-| `KBSTORE_STATE_DIR` | `~/.cache/kbstore` | Remembers synced memory files, bundles and the last snapshot tree |
+| `KBSTORE_STATE_DIR` | `~/.cache/kbstore` | Remembers synced memory files, the last snapshot tree and pending large files |
 
 ## Rules
 

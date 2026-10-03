@@ -254,6 +254,34 @@ class GitSource(UUIDMixin, TimestampMixin, table=True):
         return f"refs/sources/{slugify_segment(self.device)}-{slugify_segment(self.path)}"
 
 
+class Blob(UUIDMixin, TimestampMixin, table=True):
+    __tablename__ = "blob"
+
+    digest: str = Field(unique=True, index=True)
+    byte_size: int = Field(default=0, sa_type=BigInteger)
+    chunks: list[str] = Field(default_factory=list, sa_type=JSONB(none_as_null=True))
+    completed_at: datetime | None = Field(default=None, sa_type=DateTime(timezone=True))
+
+    @staticmethod
+    def path_of(digest: str) -> str:
+        return f"blobs/{digest[:2]}/{digest}"
+
+    @staticmethod
+    def chunk_path_of(digest: str) -> str:
+        return f"chunks/{digest[:2]}/{digest}"
+
+
+class WorktreeFile(UUIDMixin, TimestampMixin, table=True):
+    __tablename__ = "worktree_file"
+    __table_args__ = (UniqueConstraint("source_id", "path", name="uq_worktree_file_location"),)
+
+    source_id: UUID = Field(foreign_key="git_source.id", ondelete="CASCADE", index=True)
+    path: str
+    digest: str = Field(index=True)
+    byte_size: int = Field(default=0, sa_type=BigInteger)
+    modified_at: datetime = Field(sa_type=DateTime(timezone=True))
+
+
 class ProjectEntry(UUIDMixin, TimestampMixin, table=True):
     __tablename__ = "project_entry"
 

@@ -32,6 +32,10 @@ PROMISOR_CONFIG = (
 )
 
 
+def clip(text: str) -> str:
+    return text if len(text) <= OUTPUT_CHARS else text[:OUTPUT_CHARS] + f"\n… truncated ({len(text)} chars)"
+
+
 class GitRepository(RepositoryImpl):
     root: storageDirDI
 
@@ -56,8 +60,7 @@ class GitRepository(RepositoryImpl):
         return done.stdout
 
     def clipped(self, relative_path: str, *args: str) -> str:
-        text = self.run(relative_path, *args, check=False)
-        return text if len(text) <= OUTPUT_CHARS else text[:OUTPUT_CHARS] + f"\n… truncated ({len(text)} chars)"
+        return clip(self.run(relative_path, *args, check=False))
 
     def exists(self, relative_path: str) -> bool:
         return (self.root / relative_path / "HEAD").is_file()

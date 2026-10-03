@@ -28,6 +28,8 @@ if TYPE_CHECKING:
 
 ObservationCategory = Literal["decision", "problem", "next", "change", "fact", "idea"]
 MemoryFileName = Annotated[str, Field(pattern=r"^[^/\\]+\.md$")]
+DIGEST_PATTERN = r"^[0-9a-f]{64}$"
+Digest = Annotated[str, Field(pattern=DIGEST_PATTERN)]
 ProjectName = Annotated[str, Field(min_length=1, max_length=200)]
 
 
@@ -225,12 +227,67 @@ class GitIngestRequest(BaseModel):
     snapshot: bool = Field(default=False, description="true when the bundle carries a worktree snapshot commit instead of real history")
 
 
+class WorktreeFileReport(BaseModel):
+    path: str
+    digest: Digest
+    byte_size: int = Field(ge=0)
+    modified_at: datetime
+
+
+class WorktreeFilesRequest(BaseModel):
+    device: str
+    path: str
+    remote: str | None = None
+    roots: list[str] = Field(default_factory=list)
+    files: list[WorktreeFileReport] = Field(description="every large file the worktree holds now; files left out are forgotten")
+
+    @field_validator("files")
+    @classmethod
+    def paths_are_unique(cls, files: list[WorktreeFileReport]) -> list[WorktreeFileReport]:
+        if len({file.path for file in files}) != len(files):
+            msg = "each path may be reported once"
+            raise ValueError(msg)
+        return files
+
+
+class WorktreeFilesState(BaseModel):
+    source_id: UUID
+    files: int
+    skipped: list[str] = Field(default_factory=list, description="paths whose blob is not complete; report them again after uploading")
+
+
+class BlobMissingRequest(BaseModel):
+    digests: list[Digest] = Field(max_length=4096)
+
+
+class BlobMissingResult(BaseModel):
+    missing: list[str]
+
+
+class BlobManifestPart(BaseModel):
+    byte_size: int = Field(ge=0)
+    chunks: list[Digest] = Field(max_length=4096)
+
+
+class ChunkState(BaseModel):
+    digest: str
+    byte_size: int
+
+
+class BlobState(BaseModel):
+    digest: str
+    byte_size: int
+    chunk_count: int
+    completed_at: datetime | None
+
+
 class GitQuery(BaseModel):
     network_id: UUID
-    command: Literal["overview", "log", "show", "read_file", "grep", "worktree"]
+    command: Literal["overview", "log", "show", "read_file", "grep", "worktree", "inspect"]
     rev: str = ""
     path: str = ""
     pattern: str = ""
+    sql: str = ""
     since: str = ""
     until: str = ""
     start: int = Field(default=1, ge=1)

@@ -11,6 +11,7 @@ from fastapi import Depends
 from backend.consts.notes import LOG_DIR, UNFILED
 from backend.models import BACKGROUND_AGENT, BACKGROUND_DEVICE, Job, JobKind, JobStatus, background_session
 from backend.repositories.alias import ProjectAliasRepository
+from backend.repositories.blob import BlobRepository, WorktreeFileRepository
 from backend.repositories.decision import NotePinRepository
 from backend.repositories.entry import ProjectEntryRepository
 from backend.repositories.git import GitNetworkRepository, GitRepository, GitSourceRepository
@@ -24,6 +25,7 @@ from backend.repositories.setting import LLMProviderRepository, RuntimeSettingRe
 from backend.repositories.storage import StorageRepository
 from backend.schemas import JobClaimed, SessionPlan, SplitRow
 from backend.services import ServiceImpl
+from backend.services.blobs import BlobService
 from backend.services.context import ContextService, contextServiceDI
 from backend.services.entries import EntryService, entryServiceDI
 from backend.services.extract import ExtractService, extractServiceDI
@@ -83,6 +85,7 @@ class BackgroundService(ServiceImpl[JobRepository]):
         runtime_settings = RuntimeSettingRepository(session=session)
         links = ProjectLinkRepository(session=session)
         entries = ProjectEntryRepository(session=session)
+        files = WorktreeFileRepository(session=session)
         projects = ProjectService(
             repository=ProjectRepository(root=notes_dir),
             aliases=ProjectAliasRepository(session=session),
@@ -107,6 +110,8 @@ class BackgroundService(ServiceImpl[JobRepository]):
                 sources=GitSourceRepository(session=session),
                 uploads=UploadRepository(session=session),
                 storage=storage,
+                files=files,
+                blobs=BlobService(repository=BlobRepository(session=session), files=files, storage=storage),
             ),
             prompts=PromptService(repository=PromptRepository(session=session), runtime=RuntimeSettingRepository(session=session)),
             transcripts=RawTranscriptRepository(session=session),

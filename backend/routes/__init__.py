@@ -6,6 +6,7 @@ from fastapi import APIRouter, Depends
 
 from backend.dependencies.auth import authenticate
 from backend.routes.auth import router as auth_router
+from backend.routes.blobs import router as blobs_router
 from backend.routes.frontend import register_frontend
 from backend.routes.git import router as git_router
 from backend.routes.health import router as health_router
@@ -24,6 +25,7 @@ def register_routes(app: FastAPI) -> None:
     protected_router.include_router(jobs_router)
     protected_router.include_router(storage_router)
     protected_router.include_router(git_router)
+    protected_router.include_router(blobs_router)
     protected_router.include_router(prompts_router)
     protected_router.include_router(settings_router)
     protected_router.include_router(wiki_router)

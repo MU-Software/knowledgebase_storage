@@ -4,7 +4,7 @@ from typing import Annotated
 
 from fastapi import APIRouter, Query
 
-from backend.schemas import GitIngestRequest, GitQuery, GitQueryResult, GitSourceState
+from backend.schemas import GitIngestRequest, GitQuery, GitQueryResult, GitSourceState, WorktreeFilesRequest, WorktreeFilesState
 from backend.services.git import gitServiceDI
 
 router = APIRouter(prefix="/git", tags=["git"])
@@ -18,6 +18,11 @@ async def known_refs(service: gitServiceDI, device: Annotated[str, Query()], pat
 @router.post("/sources")
 async def ingest_bundle(payload: GitIngestRequest, service: gitServiceDI) -> GitSourceState:
     return await service.ingest(payload)
+
+
+@router.put("/worktree-files")
+async def report_worktree_files(payload: WorktreeFilesRequest, service: gitServiceDI) -> WorktreeFilesState:
+    return await service.report_files(payload)
 
 
 @router.post("/query")

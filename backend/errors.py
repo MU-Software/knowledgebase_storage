@@ -146,6 +146,8 @@ class ClientError(ErrorEnum):
         "UPLOAD_DIGEST_MISMATCH": ErrorStructDict(status_code=status.HTTP_400_BAD_REQUEST),
         "GIT_COMMAND_FAILED": ErrorStructDict(status_code=status.HTTP_400_BAD_REQUEST),
         "INVALID_GIT_ARGUMENT": ErrorStructDict(status_code=status.HTTP_400_BAD_REQUEST),
+        "CHUNK_TOO_LARGE": ErrorStructDict(status_code=status.HTTP_413_CONTENT_TOO_LARGE),
+        "BLOB_INCOMPLETE": ErrorStructDict(status_code=status.HTTP_409_CONFLICT),
     }
 
     RESOURCE_NOT_FOUND = "The {resource} was not found."
@@ -161,6 +163,8 @@ class ClientError(ErrorEnum):
     UPLOAD_DIGEST_MISMATCH = "The uploaded bytes do not match the digest given."
     GIT_COMMAND_FAILED = "git {command} failed: {detail}"
     INVALID_GIT_ARGUMENT = "A git argument may not start with a dash: {argument}"
+    CHUNK_TOO_LARGE = "A chunk may hold at most {limit} bytes."
+    BLOB_INCOMPLETE = "Blob {digest} is not complete: {detail}"
 
     USERNAME_REQUIRED = "Enter a username."
     USERNAME_TOO_SHORT = "The username is too short. Use {min_len} to {max_len} characters."

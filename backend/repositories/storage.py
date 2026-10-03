@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from hashlib import sha256
 from typing import TYPE_CHECKING, Annotated
+from uuid import uuid4
 
 from fastapi import Depends
 
@@ -40,6 +41,16 @@ class StorageRepository(RepositoryImpl):
         with target.open("ab") as handle:
             handle.write(payload)
         return current + len(payload)
+
+    def exists(self, relative_path: str) -> bool:
+        return self.contain(relative_path).is_file()
+
+    def write_whole(self, relative_path: str, payload: bytes) -> None:
+        target = self.contain(relative_path)
+        target.parent.mkdir(parents=True, exist_ok=True)
+        staging = target.with_name(f"{target.name}.{uuid4().hex}.tmp")
+        staging.write_bytes(payload)
+        staging.replace(target)
 
     def truncate(self, relative_path: str) -> None:
         target = self.root / relative_path

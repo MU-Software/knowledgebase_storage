@@ -162,6 +162,22 @@ GIT_SPECS = [
             "parameters": {"type": "object", "properties": {"path": {"type": "string"}}, "required": []},
         },
     },
+    {
+        "type": "function",
+        "function": {
+            "name": "inspect_file",
+            "description": (
+                "A large file kept outside git, as the session left it. Leave path out to list them. "
+                "A SQLite database shows its tables and schema, and sql runs a read-only query on it; "
+                "a text file shows the numbered lines from start to end; anything else shows its type and first bytes."
+            ),
+            "parameters": {
+                "type": "object",
+                "properties": {"path": {"type": "string"}, "sql": {"type": "string"}, "start": {"type": "integer"}, "end": {"type": "integer"}},
+                "required": [],
+            },
+        },
+    },
 ]
 COMMANDS = {
     "search_changes": "log",
@@ -170,11 +186,13 @@ COMMANDS = {
     "read_file": "read_file",
     "grep": "grep",
     "worktree_diff": "worktree",
+    "inspect_file": "inspect",
 }
 
 
 def git_toolbox(api: AsyncClient, network_id: str) -> Toolbox:
     async def run(name: str, arguments: dict[str, Any]) -> str:
+        start = int(arguments.get("start") or 1)
         body = {
             "network_id": network_id,
             "command": COMMANDS.get(name, "log"),
@@ -183,8 +201,9 @@ def git_toolbox(api: AsyncClient, network_id: str) -> Toolbox:
             "pattern": arguments.get("pattern") or "",
             "since": arguments.get("since") or "",
             "until": arguments.get("until") or "",
-            "start": int(arguments.get("start") or 1),
-            "end": int(arguments.get("end") or 200),
+            "sql": arguments.get("sql") or "",
+            "start": start,
+            "end": int(arguments.get("end") or start + 199),
         }
         try:
             response = await api.post("/api/git/query", json=body)

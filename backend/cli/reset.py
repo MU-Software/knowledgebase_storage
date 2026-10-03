@@ -9,7 +9,21 @@ from sqlalchemy import delete
 from sqlmodel import col
 
 from backend.consts.notes import ARCHIVE_DIR, LOG_DIR, MEMORY_DIR, OVERVIEW_FILE, PROJECTS_ROOT, RESERVED_SEGMENTS
-from backend.models import GitNetwork, GitSource, Job, JobKind, NoteDecision, NotePin, ProjectAlias, ProjectEntry, ProjectLink, RawTranscript, Upload
+from backend.models import (
+    Blob,
+    GitNetwork,
+    GitSource,
+    Job,
+    JobKind,
+    NoteDecision,
+    NotePin,
+    ProjectAlias,
+    ProjectEntry,
+    ProjectLink,
+    RawTranscript,
+    Upload,
+    WorktreeFile,
+)
 from backend.settings import get_settings
 
 if TYPE_CHECKING:
@@ -26,12 +40,14 @@ DECIDED: tuple[tuple[str, type[SQLModel]], ...] = (
     ("project_alias", ProjectAlias),
 )
 RAW: tuple[tuple[str, type[SQLModel]], ...] = (
+    ("worktree_file", WorktreeFile),
+    ("blob", Blob),
     ("git_source", GitSource),
     ("git_network", GitNetwork),
     ("raw_transcript", RawTranscript),
     ("upload", Upload),
 )
-STORAGE_DIRS = ("transcripts", "repos", "uploads")
+STORAGE_DIRS = ("transcripts", "repos", "uploads", "blobs", "chunks")
 DERIVED_NAMES = (LOG_DIR, OVERVIEW_FILE)
 MEMORY_NAMES = (MEMORY_DIR, ARCHIVE_DIR)
 
