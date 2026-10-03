@@ -165,15 +165,19 @@ GIT_SPECS = [
     {
         "type": "function",
         "function": {
-            "name": "inspect_file",
+            "name": "run_on_file",
             "description": (
-                "A large file kept outside git, as the session left it. Leave path out to list them. "
-                "A SQLite database shows its tables and schema, and sql runs a read-only query on it; "
-                "a text file shows the numbered lines from start to end; anything else shows its type and first bytes."
+                "Run a shell command on one large file kept outside git, as the session left it. Leave path out to list those files. "
+                "{file} in script stands for the file; without a script you get its type. The command runs offline and read-only with "
+                "sqlite3, duckdb (parquet, csv, json, sqlite and excel), jq, xmllint, rg, grep, sed, awk, head, tail, wc, file, xxd, "
+                "strings, readelf, nm, objdump and addr2line for any architecture, pdftotext, pdfinfo, catdoc, mediainfo, "
+                "protoc --decode_raw, h5dump, bsdtar, unzip, zcat, xzcat, zstdcat, iconv and python3. "
+                "Files it writes are discarded afterwards. The file sits on read-only storage, so open SQLite as "
+                "sqlite3 'file:{file}?immutable=1' when a plain open fails. Output stops at 6000 characters, so narrow it with head or grep."
             ),
             "parameters": {
                 "type": "object",
-                "properties": {"path": {"type": "string"}, "sql": {"type": "string"}, "start": {"type": "integer"}, "end": {"type": "integer"}},
+                "properties": {"path": {"type": "string"}, "script": {"type": "string"}},
                 "required": [],
             },
         },
@@ -186,7 +190,7 @@ COMMANDS = {
     "read_file": "read_file",
     "grep": "grep",
     "worktree_diff": "worktree",
-    "inspect_file": "inspect",
+    "run_on_file": "inspect",
 }
 
 
@@ -201,15 +205,16 @@ def git_toolbox(api: AsyncClient, network_id: str) -> Toolbox:
             "pattern": arguments.get("pattern") or "",
             "since": arguments.get("since") or "",
             "until": arguments.get("until") or "",
-            "sql": arguments.get("sql") or "",
+            "script": arguments.get("script") or "",
             "start": start,
             "end": int(arguments.get("end") or start + 199),
         }
         try:
             response = await api.post("/api/git/query", json=body)
-            response.raise_for_status()
         except Exception as exc:  # noqa: BLE001
             return f"tool failed: {exc}"
+        if response.is_error:
+            return f"tool failed with {response.status_code}: {response.text[:500]}"
         return str(response.json().get("output") or "")
 
     return Toolbox(specs=GIT_SPECS, run=run, rounds=6)

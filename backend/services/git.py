@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from pathlib import PurePosixPath
 from typing import TYPE_CHECKING, Annotated
 
 from fastapi import Depends
@@ -86,7 +87,7 @@ class GitService(ServiceImpl[GitRepository]):
             for path, (file, device) in list(newest.items())[:LISTED_FILES]
         ]
         rest = len(newest) - LISTED_FILES
-        heading = f"large files kept outside git ({len(newest)}), readable with inspect_file:\n"
+        heading = f"large files kept outside git ({len(newest)}), readable with run_on_file:\n"
         return heading + "\n".join(lines) + (f"\n… {rest} more" if rest > 0 else "")
 
     async def inspect(self, network_id: UUID, payload: GitQuery) -> str:
@@ -97,7 +98,7 @@ class GitService(ServiceImpl[GitRepository]):
             return f"{payload.path} is not one of the large files; use read_file for files in git"
         file, device = newest[payload.path]
         heading = f"{file.path} as {device} last saw it ({file.modified_at.isoformat(timespec='minutes')}, {file.byte_size} bytes)"
-        return f"{heading}\n\n{await self.blobs.inspect(file.digest, payload)}"
+        return f"{heading}\n\n{await self.blobs.inspect(file.digest, PurePosixPath(file.path).name, payload.script)}"
 
     async def ingest(self, payload: GitIngestRequest) -> GitSourceState:
         upload = await self.uploads.retrieve_by_id(payload.upload_id)

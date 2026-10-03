@@ -25,7 +25,12 @@ def get_storage_dir() -> Path:
     return get_settings().storage_dir
 
 
+def get_sandbox_socket() -> Path:
+    return get_settings().sandbox_socket
+
+
 dbDI = Annotated[AsyncSession, Depends(get_session)]  # noqa: N816
 settingsDI = Annotated[ProjectSetting, Depends(get_settings)]  # noqa: N816
 notesDirDI = Annotated[Path, Depends(get_notes_dir)]  # noqa: N816
 storageDirDI = Annotated[Path, Depends(get_storage_dir)]  # noqa: N816
+sandboxSocketDI = Annotated[Path, Depends(get_sandbox_socket)]  # noqa: N816

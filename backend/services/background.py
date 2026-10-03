@@ -21,6 +21,7 @@ from backend.repositories.note import NoteRepository
 from backend.repositories.project import ProjectRepository
 from backend.repositories.prompt import PromptRepository
 from backend.repositories.raw import RawTranscriptRepository, UploadRepository, rawTranscriptRepositoryDI
+from backend.repositories.sandbox import SandboxRepository
 from backend.repositories.setting import LLMProviderRepository, RuntimeSettingRepository, llmProviderRepositoryDI, runtimeSettingRepositoryDI
 from backend.repositories.storage import StorageRepository
 from backend.schemas import JobClaimed, SessionPlan, SplitRow
@@ -78,7 +79,7 @@ class BackgroundService(ServiceImpl[JobRepository]):
     split: splitServiceDI
 
     @classmethod
-    def for_session(cls, session: AsyncSession, notes_dir: Path, storage_dir: Path) -> Self:
+    def for_session(cls, session: AsyncSession, notes_dir: Path, storage_dir: Path, sandbox_socket: Path) -> Self:
         notes = NoteService(repository=NoteRepository(root=notes_dir))
         jobs = JobRepository(session=session)
         storage = StorageRepository(root=storage_dir)
@@ -111,7 +112,12 @@ class BackgroundService(ServiceImpl[JobRepository]):
                 uploads=UploadRepository(session=session),
                 storage=storage,
                 files=files,
-                blobs=BlobService(repository=BlobRepository(session=session), files=files, storage=storage),
+                blobs=BlobService(
+                    repository=BlobRepository(session=session),
+                    files=files,
+                    storage=storage,
+                    sandbox=SandboxRepository(socket=sandbox_socket),
+                ),
             ),
             prompts=PromptService(repository=PromptRepository(session=session), runtime=RuntimeSettingRepository(session=session)),
             transcripts=RawTranscriptRepository(session=session),

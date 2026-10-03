@@ -24,6 +24,7 @@ services:
     volumes:
       - knowledgebase-notes:/srv/knowledgebase/notes
       - knowledgebase-storage:/srv/knowledgebase/storage
+      - kbstore-sandbox-socket:/run/kbstore
     healthcheck:
       test: ["CMD", "python", "-c", "import urllib.request;urllib.request.urlopen('http://127.0.0.1:8006/readyz')"]
       interval: 10s
@@ -43,6 +44,23 @@ services:
     depends_on:
       kbstore-api:
         condition: service_healthy
+
+  kbstore-sandbox:
+    image: "ghcr.io/mu-software/knowledgebase_storage:${KBSTORE_IMAGE_TAG:?Set KBSTORE_IMAGE_TAG}"
+    command: ["python", "-m", "backend.cli", "sandbox"]
+    restart: unless-stopped
+    logging: *default-logging
+    network_mode: none
+    read_only: true
+    user: "1000:1000"
+    cap_drop: [ALL]
+    security_opt: ["no-new-privileges:true"]
+    mem_limit: 2g
+    pids_limit: 128
+    tmpfs: ["/tmp:size=512m"]
+    volumes:
+      - knowledgebase-storage:/srv/knowledgebase/storage:ro
+      - kbstore-sandbox-socket:/run/kbstore
 
   basic-memory:
     image: "ghcr.io/mu-software/basic-memory:${BASIC_MEMORY_IMAGE_TAG:-latest}"
@@ -66,6 +84,9 @@ volumes:
   knowledgebase-storage:
     driver: local
     driver_opts: { type: none, o: bind, device: /srv/data/knowledgebase/storage }
+  kbstore-sandbox-socket:
+    driver: local
+    driver_opts: { type: tmpfs, device: tmpfs, o: "size=1m,uid=1000,gid=1000,mode=0755" }
   knowledgebase-config:
     driver: local
     driver_opts: { type: none, o: bind, device: /srv/data/knowledgebase/config }

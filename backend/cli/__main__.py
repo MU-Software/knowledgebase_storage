@@ -1,6 +1,7 @@
 import typer
 
 from backend.cli.reset import reset
+from backend.cli.sandbox import sandbox
 from backend.cli.users import create_user, set_password
 from backend.cli.worker import worker
 
@@ -16,6 +17,7 @@ cli.command()(worker)
 cli.command()(create_user)
 cli.command()(set_password)
 cli.command()(reset)
+cli.command()(sandbox)
 
 if __name__ == "__main__":
     cli()

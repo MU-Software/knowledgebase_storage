@@ -48,7 +48,9 @@ async def lifespan(_app: FastAPI) -> AsyncIterator[None]:
                         logger.info("forgot %d sign-in failure(s) past their window", forgotten)
                     if (now := monotonic()) - swept_at >= BACKGROUND_SWEEP_SECONDS:
                         swept_at = now
-                        if queued := await BackgroundService.for_session(session, settings.notes_dir, settings.storage_dir).sweep():
+                        if queued := await BackgroundService.for_session(
+                            session, settings.notes_dir, settings.storage_dir, settings.sandbox_socket
+                        ).sweep():
                             logger.info("queued background work for idle providers: %s", queued)
                     interval = runtime.maintenance_interval_seconds
             except Exception:

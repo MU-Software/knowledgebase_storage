@@ -287,7 +287,7 @@ class GitQuery(BaseModel):
     rev: str = ""
     path: str = ""
     pattern: str = ""
-    sql: str = ""
+    script: str = Field(default="", max_length=16000)
     since: str = ""
     until: str = ""
     start: int = Field(default=1, ge=1)

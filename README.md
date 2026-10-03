@@ -96,8 +96,9 @@ Merge `infra/docker-compose.workbench.yaml` into the compose file on the host.
 Exposure is a tailnet IP binding only — nginx is not involved.
 The api runs `git` against the stored repositories, so its image installs git and keeps
 `STORAGE_DIR` on a volume of its own; the worker needs neither, since it reads repositories
-through `/api/git/query`. After pulling a new image, run `uv run alembic upgrade head` in the api
-container.
+through `/api/git/query`. `kbstore-sandbox` runs the worker's `run_on_file` commands with no network
+and storage mounted read-only; the api reaches it through the `kbstore-sandbox-socket` volume.
+After pulling a new image, run `uv run alembic upgrade head` in the api container.
 
 ## Rebuilding
 

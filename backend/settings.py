@@ -12,6 +12,8 @@ from sqlalchemy.ext.asyncio.session import async_sessionmaker
 from sqlmodel.ext.asyncio.session import AsyncSession
 from uvicorn.config import Config as UvicornConfig
 
+from backend.consts.sandbox import SANDBOX_SOCKET
+
 BACKEND_DIR = Path(__file__).parent
 PROJECT_DIR = BACKEND_DIR.parent
 FRONTEND_PATH = BACKEND_DIR / "frontend" / "index.html"
@@ -35,6 +37,7 @@ class ProjectSetting(BaseSettings):
     port: int = 8006
     notes_dir: Path = Path("/srv/knowledgebase/notes")
     storage_dir: Path = Path("/srv/knowledgebase/storage")
+    sandbox_socket: Path = SANDBOX_SOCKET
     log_level: Literal["DEBUG", "INFO", "WARNING", "ERROR"] = "INFO"
     https_enabled: bool = False
     secret_key: SecretStr = Field(default_factory=lambda: SecretStr(token_hex(32)))
