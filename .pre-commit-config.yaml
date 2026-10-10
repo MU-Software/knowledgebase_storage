@@ -8,6 +8,7 @@ repos:
       - id: check-json
       - id: check-toml
       - id: check-yaml
+        args: [--allow-multiple-documents]
       - id: check-added-large-files
       - id: detect-private-key
       - id: end-of-file-fixer
@@ -16,7 +17,7 @@ repos:
         exclude_types: [markdown]
 
   - repo: https://github.com/astral-sh/ruff-pre-commit
-    rev: v0.16.6
+    rev: v0.17.0
     hooks:
       - id: ruff-check
         args: [--fix]
@@ -24,7 +25,7 @@ repos:
 
 
   - repo: https://github.com/pre-commit/mirrors-mypy
-    rev: 'v1.19.0'
+    rev: 'v2.4.0'
     hooks:
       - id: mypy
         files: ^(backend|hooks)/
@@ -44,7 +45,7 @@ repos:
           - uvicorn
 
   - repo: https://github.com/astral-sh/uv-pre-commit
-    rev: 0.9.13
+    rev: 0.13.0
     hooks:
       - id: uv-lock
 
@@ -53,4 +54,4 @@ repos:
     hooks:
       - id: prettier
         files: ^frontend/.*\.(ts|tsx|json|css|html)$
-        additional_dependencies: [prettier@3.6.2]
+        additional_dependencies: [prettier@3.9.9]

@@ -29,7 +29,7 @@ class PromptService(ServiceImpl[PromptRepository]):
         for stage, defaults in DEFAULTS.items():
             current = known.get(stage)
             if current is None:
-                await self.repository.save(Prompt(stage=stage, label=BUILT_IN, status=PromptStatus.ACTIVE, **defaults))
+                await self.repository.save(Prompt.model_validate({"stage": stage, "label": BUILT_IN, "status": PromptStatus.ACTIVE, **defaults}))
                 made += 1
             elif current.label == BUILT_IN and current.parent_id is None and any(getattr(current, key) != value for key, value in defaults.items()):
                 current.sqlmodel_update(defaults)

@@ -159,7 +159,7 @@ const Links = () => {
         <Typography variant="subtitle2" gutterBottom>
           Rebuild notes from the stored transcripts
         </Typography>
-        <Stack direction="row" spacing={1} alignItems="center">
+        <Stack direction="row" spacing={1} sx={{ alignItems: 'center' }}>
           <Button
             variant="outlined"
             disabled={rebuild.isPending}

@@ -20,7 +20,7 @@ export default tseslint.config(
       'react-refresh': reactRefresh,
     },
     settings: {
-      react: { version: 'detect' },
+      react: { version: '19.3' },
     },
     rules: {
       ...reactHooks.configs.recommended.rules,

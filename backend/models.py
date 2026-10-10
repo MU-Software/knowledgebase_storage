@@ -3,6 +3,7 @@ from __future__ import annotations
 import json
 from datetime import UTC, datetime
 from enum import StrEnum
+from functools import partial
 from hashlib import sha256
 from typing import TYPE_CHECKING, Any
 from uuid import UUID, uuid4
@@ -77,13 +78,23 @@ def enum_type(enum_class: type[StrEnum]) -> Enum:
     )
 
 
+def server_now(*, index: bool = False) -> Any:
+    return Field(
+        default_factory=partial(datetime.now, UTC),
+        sa_type=DateTime(timezone=True),
+        sa_column_kwargs={"server_default": text("now()")},
+        index=index,
+    )
+
+
 class UUIDMixin(SQLModel):
     id: UUID = Field(default_factory=uuid4, primary_key=True)
 
 
 class TimestampMixin(SQLModel):
-    created_at: datetime = Field(sa_type=DateTime(timezone=True), sa_column_kwargs={"server_default": text("now()")})
+    created_at: datetime = server_now()
     updated_at: datetime = Field(
+        default_factory=partial(datetime.now, UTC),
         sa_type=DateTime(timezone=True),
         sa_column_kwargs={"server_default": text("now()"), "onupdate": now()},
     )
@@ -134,7 +145,7 @@ class Job(UUIDMixin, TimestampMixin, JobBase, table=True):
     kind: JobKind = Field(default=JobKind.SESSION, sa_type=enum_type(JobKind))
     priority: int = 0
     status: JobStatus = Field(default=JobStatus.PENDING, sa_type=enum_type(JobStatus))
-    last_activity_at: datetime = Field(sa_type=DateTime(timezone=True), sa_column_kwargs={"server_default": text("now()")})
+    last_activity_at: datetime = server_now()
     transcript_digest: str | None = None
     last_request: str | None = None
 
@@ -432,7 +443,7 @@ class User(UUIDMixin, TimestampMixin, SoftDeleteMixin, table=True):
 
     username: UsernameField
     password: PasswordField = Field(exclude=True)
-    password_updated_at: datetime = Field(sa_type=DateTime(timezone=True), sa_column_kwargs={"server_default": text("now()")})
+    password_updated_at: datetime = server_now()
     last_login_at: datetime | None = Field(default=None, sa_type=DateTime(timezone=True))
 
     @field_validator("password", mode="after")
@@ -459,4 +470,4 @@ class LoginFailure(UUIDMixin, table=True):
 
     username: str = Field(index=True)
     client_ip: str = Field(index=True)
-    created_at: datetime = Field(sa_type=DateTime(timezone=True), sa_column_kwargs={"server_default": text("now()")}, index=True)
+    created_at: datetime = server_now(index=True)

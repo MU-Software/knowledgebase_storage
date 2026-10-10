@@ -65,7 +65,7 @@ const Prompts = () => {
       {chosen ? (
         <Paper variant="outlined" sx={{ p: 2 }}>
           <Stack spacing={2}>
-            <Stack direction="row" spacing={1} alignItems="center">
+            <Stack direction="row" spacing={1} sx={{ alignItems: 'center' }}>
               <Chip size="small" label={chosen.status} color={chosen.status === 'active' ? 'success' : 'default'} />
               <TextField
                 label="Label"
