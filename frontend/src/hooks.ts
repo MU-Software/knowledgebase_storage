@@ -95,6 +95,11 @@ export const useJobs = (offset: number, limit: number) =>
 export const useClaimedJobs = () =>
   useSuspenseQuery({ queryKey: ['jobs', 'claimed'], queryFn: () => api.jobs({ offset: 0, limit: 200, status: 'claimed' }), refetchInterval: 10_000 })
 
+export const useRetryJob = () => {
+  const client = useQueryClient()
+  return useMutation({ mutationFn: api.retryJob, onSuccess: () => client.invalidateQueries({ queryKey: ['jobs'] }) })
+}
+
 export const useSearch = (query: string) => useSuspenseQuery({ queryKey: ['search', query], queryFn: () => api.search(query) })
 
 export const useSettings = () => useSuspenseQuery({ queryKey: ['settings'], queryFn: api.settings })

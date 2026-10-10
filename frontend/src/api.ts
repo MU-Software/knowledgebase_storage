@@ -236,6 +236,7 @@ export const api = {
   testProvider: (id: string) => send<ProviderTestResult>('POST', `/llm-providers/${id}/test`),
   projects: () => get<ProjectNode[]>('/wiki/projects'),
   mergeProjects: (payload: { source: string; target: string }) => send<ProjectMergeResult>('POST', '/wiki/projects/merge', payload),
+  retryJob: (id: string) => send<Job>('POST', `/jobs/${id}/retry`),
   deleteProject: (name: string) => send<ProjectDeleteResult>('DELETE', `/wiki/projects/${encodeURIComponent(name)}`),
   requestOverview: (name: string) => send<Job | null>('POST', `/wiki/projects/${encodeURIComponent(name)}/overview`),
   notes: (project?: string) => get<NoteSummary[]>(`/wiki/notes${project ? `?project=${encodeURIComponent(project)}` : ''}`),

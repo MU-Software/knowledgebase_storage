@@ -253,5 +253,16 @@ class JobService(ServiceImpl[JobRepository]):
         background = provider is not None and provider.background_jobs
         return await self.repository.claim_next(worker, idle, background=background, priority=provider.priority if provider else None)
 
+    async def retry(self, job: Job) -> Job:
+        if job.status is not JobStatus.FAILED:
+            ClientError.JOB_NOT_FAILED.format_msg(job_id=job.id, status=job.status).raise_()
+        job.status = JobStatus.PENDING
+        job.attempts = 0
+        job.next_attempt_at = None
+        job.claimed_at = None
+        job.claimed_by = None
+        job.claim_token = None
+        return await self.repository.save(job)
+
 
 jobServiceDI = Annotated[JobService, Depends(JobService)]  # noqa: N816

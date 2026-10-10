@@ -3,8 +3,9 @@ from __future__ import annotations
 from typing import Annotated
 from uuid import UUID
 
-from fastapi import APIRouter, Query, Response, status
+from fastapi import APIRouter, Depends, Query, Response, status
 
+from backend.dependencies.auth import require_login
 from backend.models import JobBase, JobStatus
 from backend.schemas import (
     JobClaimed,
@@ -25,6 +26,7 @@ DEFAULT_LIST_LIMIT = 50
 MAX_LIST_LIMIT = 200
 
 router = APIRouter(prefix="/jobs", tags=["jobs"])
+owner_router = APIRouter(prefix="/jobs", tags=["jobs"], dependencies=[Depends(require_login)])
 
 
 @router.post("")
@@ -169,3 +171,8 @@ async def list_jobs(
 ) -> JobPage:
     jobs, total = await service.list_jobs(job_status, offset, limit)
     return JobPage(items=[JobPublic.model_validate(job, from_attributes=True) for job in jobs], total=total)
+
+
+@owner_router.post("/{job_id}/retry")
+async def retry(job_id: UUID, service: jobServiceDI) -> JobPublic:
+    return JobPublic.model_validate(await service.retry(await service.retrieve(job_id, lock=True)), from_attributes=True)

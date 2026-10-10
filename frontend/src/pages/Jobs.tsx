@@ -1,9 +1,27 @@
-import { Chip, Paper, Stack, Table, TableBody, TableCell, TableHead, TablePagination, TableRow, Typography } from '@mui/material'
-import { useEffect, useTransition } from 'react'
+import {
+  Alert,
+  Button,
+  Chip,
+  Dialog,
+  DialogActions,
+  DialogContent,
+  DialogContentText,
+  DialogTitle,
+  Paper,
+  Stack,
+  Table,
+  TableBody,
+  TableCell,
+  TableHead,
+  TablePagination,
+  TableRow,
+  Typography,
+} from '@mui/material'
+import { useEffect, useState, useTransition } from 'react'
 import { useSearchParams } from 'react-router-dom'
 
 import type { Job } from '../api'
-import { useClaimedJobs, useJobs, useProviders } from '../hooks'
+import { useClaimedJobs, useJobs, useProviders, useRetryJob } from '../hooks'
 
 const STATUS_COLOR = {
   pending: 'default',
@@ -108,9 +126,33 @@ const Working = () => {
   )
 }
 
+const RetryJob = ({ job, onClose }: { job: Job; onClose: () => void }) => {
+  const retry = useRetryJob()
+
+  return (
+    <Dialog open onClose={onClose} fullWidth maxWidth="sm">
+      <DialogTitle>
+        Retry {job.kind.replace('_', ' ')} for {job.project}
+      </DialogTitle>
+      <DialogContent>
+        <DialogContentText sx={{ mb: 2, wordBreak: 'break-word' }}>{job.last_error ?? 'It failed without a recorded error.'}</DialogContentText>
+        <DialogContentText>Requests it already finished are kept, so it picks up where it stopped.</DialogContentText>
+        {retry.error && <Alert severity="error" sx={{ mt: 2 }}>{`Could not retry it: ${retry.error.message}`}</Alert>}
+      </DialogContent>
+      <DialogActions>
+        <Button onClick={onClose}>Cancel</Button>
+        <Button variant="contained" disabled={retry.isPending} onClick={() => retry.mutate(job.id, { onSuccess: onClose })}>
+          Retry
+        </Button>
+      </DialogActions>
+    </Dialog>
+  )
+}
+
 const Jobs = () => {
   const [params, setParams] = useSearchParams()
   const [, startTransition] = useTransition()
+  const [retrying, setRetrying] = useState<Job | null>(null)
 
   const requestedSize = Number(params.get('size'))
   const fallbackSize = rememberedPageSize()
@@ -143,6 +185,7 @@ const Jobs = () => {
             <TableCell>Summarizer</TableCell>
             <TableCell>Created</TableCell>
             <TableCell>Last activity</TableCell>
+            <TableCell />
           </TableRow>
         </TableHead>
         <TableBody>
@@ -158,6 +201,13 @@ const Jobs = () => {
               <TableCell>{job.summarizer ?? '—'}</TableCell>
               <TableCell>{new Date(job.created_at).toLocaleString()}</TableCell>
               <TableCell>{new Date(job.last_activity_at).toLocaleString()}</TableCell>
+              <TableCell>
+                {job.status === 'failed' && (
+                  <Button size="small" onClick={() => setRetrying(job)}>
+                    Retry
+                  </Button>
+                )}
+              </TableCell>
             </TableRow>
           ))}
         </TableBody>
@@ -178,6 +228,7 @@ const Jobs = () => {
           go(0, size)
         }}
       />
+      {retrying && <RetryJob job={retrying} onClose={() => setRetrying(null)} />}
     </>
   )
 }
