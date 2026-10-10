@@ -30,9 +30,16 @@ API_KEY = os.environ.get("KBSTORE_API_KEY")
 TIMEOUT_SECONDS = float(os.environ.get("KBSTORE_TIMEOUT", "3"))
 UPLOAD_TIMEOUT_SECONDS = float(os.environ.get("KBSTORE_UPLOAD_TIMEOUT", "60"))
 BUNDLE_TIMEOUT_SECONDS = float(os.environ.get("KBSTORE_BUNDLE_TIMEOUT", "30"))
-BLOB_LIMIT_PARTS = re.fullmatch(r"(\d+)([kmg]?)", os.environ.get("KBSTORE_BLOB_LIMIT", "").strip().lower()) or re.fullmatch(r"(\d+)([kmg]?)", "2m")
-BLOB_LIMIT = BLOB_LIMIT_PARTS[0]
-BLOB_LIMIT_BYTES = int(BLOB_LIMIT_PARTS[1]) << {"": 0, "k": 10, "m": 20, "g": 30}[BLOB_LIMIT_PARTS[2]]
+
+
+def blob_limit_of(spec: str) -> tuple[str, int]:
+    parts = re.fullmatch(r"(\d+)([kmg]?)", spec)
+    if parts is None:
+        return blob_limit_of("2m")
+    return parts[0], int(parts[1]) << {"": 0, "k": 10, "m": 20, "g": 30}[parts[2]]
+
+
+BLOB_LIMIT, BLOB_LIMIT_BYTES = blob_limit_of(os.environ.get("KBSTORE_BLOB_LIMIT", "").strip().lower())
 IDLE_SECONDS = float(os.environ.get("KBSTORE_IDLE_SECONDS", "1200"))
 POLL_SECONDS = float(os.environ.get("KBSTORE_POLL_SECONDS", "60"))
 CHUNK_BYTES = int(os.environ.get("KBSTORE_CHUNK_BYTES", "1000000"))
@@ -308,14 +315,15 @@ def push_git(fields: dict[str, str], cwd: Path) -> None:
     if large is not None:
         queue_large_files(fields, repo, large)
     known = call("GET", "/api/git/sources?" + urllib.parse.urlencode({"device": fields["device"], "path": repo.as_posix()}))
-    registered = isinstance(known, dict)
-    every = sorted(set(known.get("refs", {}).values())) if registered else []
+    refs = known.get("refs", {}) if isinstance(known, dict) else None
+    registered = refs is not None
+    every = sorted(set((refs or {}).values()))
     heads = (_git(repo, "rev-parse", "--branches", "--tags", "HEAD") or "").split()
     if (not registered or (heads and not every)) and not small_enough(repo):
         return
 
     tips = [tip for tip in every if run_git(repo, "cat-file", "-e", f"{tip}^{{commit}}")[0]]
-    current = all(head in tips for head in heads)
+    current: bool | None = all(head in tips for head in heads)
     if not current:
         current = push_history(fields, repo, tips, registered=registered)
         if current is None:

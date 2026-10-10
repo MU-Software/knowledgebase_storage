@@ -118,6 +118,7 @@ class IngestService(ServiceImpl[RawTranscriptRepository]):
             job.claimed_at = None
             job.claimed_by = None
             job.claim_token = None
+            job.checkpoint = None
             job.last_activity_at = transcript.ended_at or datetime.now(UTC)
             reopened.append((await self.jobs.save(job)).id)
         return reopened

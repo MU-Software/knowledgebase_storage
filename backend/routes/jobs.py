@@ -10,6 +10,7 @@ from backend.schemas import (
     JobClaimed,
     JobFailRequest,
     JobPage,
+    JobProgress,
     JobPublic,
     LinkVerdict,
     MemoryContent,
@@ -136,6 +137,16 @@ async def heartbeat(
     token: Annotated[UUID, Query(description="claim token returned by /claim")],
 ) -> None:
     await service.heartbeat(await service.claim_held(job_id, token))
+
+
+@router.post("/{job_id}/progress", status_code=status.HTTP_204_NO_CONTENT)
+async def progress(
+    job_id: UUID,
+    payload: JobProgress,
+    service: jobServiceDI,
+    token: Annotated[UUID, Query(description="claim token returned by /claim")],
+) -> None:
+    await service.report(await service.claim_held(job_id, token), payload)
 
 
 @router.post("/{job_id}/release")

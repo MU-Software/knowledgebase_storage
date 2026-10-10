@@ -15,6 +15,10 @@ if TYPE_CHECKING:
 
 
 MAX_REDUCE_ROUNDS = 5
+ANSWER_TOKENS = 20000
+ROUND_TOKENS = 8192
+ROUND_ANSWER_TOKENS = 4096
+TOOL_FAILED = "tool failed"
 R = TypeVar("R", bound=BaseModel)
 
 
@@ -35,6 +39,7 @@ def strict(schema: dict[str, Any]) -> dict[str, Any]:
 class Summarizer(ABC):
     context_tokens: int
     language: str
+    retry_seconds: tuple[float, ...] = ()
 
     @abstractmethod
     async def complete(self, system: str, user: str, *, schema: dict[str, Any] | None = None, settings: dict[str, Any] | None = None) -> str: ...

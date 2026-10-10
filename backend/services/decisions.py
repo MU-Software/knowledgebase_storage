@@ -52,6 +52,7 @@ class DecisionService(ServiceImpl[NoteDecisionRepository]):
         if job is not None:
             job.note_path = None
             job.transcript = None
+            job.checkpoint = None
             if job.status in {JobStatus.PENDING, JobStatus.CLAIMED}:
                 job.status = JobStatus.DONE
                 job.completed_at = datetime.now(UTC)

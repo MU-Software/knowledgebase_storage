@@ -117,6 +117,7 @@ export type Job = {
   heartbeat_at: string | null
   attempts: number
   last_error: string | null
+  progress: string | null
   summarizer: string | null
   note_path: string | null
   completed_at: string | null

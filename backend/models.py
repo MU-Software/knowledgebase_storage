@@ -156,6 +156,8 @@ class Job(UUIDMixin, TimestampMixin, JobBase, table=True):
     next_attempt_at: datetime | None = Field(default=None, sa_type=DateTime(timezone=True))
     attempts: int = 0
     last_error: str | None = None
+    progress: str | None = None
+    checkpoint: dict[str, Any] | None = Field(default=None, sa_type=JSONB(none_as_null=True))
 
     summarizer: str | None = None
     note_path: str | None = None

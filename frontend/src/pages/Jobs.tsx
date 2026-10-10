@@ -60,6 +60,7 @@ const Working = () => {
             <TableCell>Project</TableCell>
             <TableCell>Agent</TableCell>
             <TableCell>Device</TableCell>
+            <TableCell>Progress</TableCell>
             <TableCell>Running for</TableCell>
             <TableCell>Last heartbeat</TableCell>
           </TableRow>
@@ -77,7 +78,7 @@ const Working = () => {
               return (
                 <TableRow key={name}>
                   <TableCell>{label}</TableCell>
-                  <TableCell colSpan={6} sx={{ color: 'text.secondary' }}>
+                  <TableCell colSpan={7} sx={{ color: 'text.secondary' }}>
                     idle
                   </TableCell>
                 </TableRow>
@@ -94,6 +95,7 @@ const Working = () => {
                   <TableCell>{job.project}</TableCell>
                   <TableCell>{job.agent}</TableCell>
                   <TableCell>{job.device}</TableCell>
+                  <TableCell>{job.progress ?? '—'}</TableCell>
                   <TableCell>{elapsed(claimedAt, now)}</TableCell>
                   <TableCell sx={silent ? { color: 'warning.main' } : undefined}>{beat ? `${elapsed(beat, now)} ago` : 'none yet'}</TableCell>
                 </TableRow>

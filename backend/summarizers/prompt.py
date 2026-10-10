@@ -108,7 +108,7 @@ RESULT_JSON_SCHEMA = _require_every_field(SummaryResult.model_json_schema())
 OVERVIEW_JSON_SCHEMA = _require_every_field(ProjectOverview.model_json_schema())
 RELATIONS_JSON_SCHEMA = _require_every_field(NoteRelations.model_json_schema())
 
-_CHARS_PER_TOKEN = 2.0
+CHARS_PER_TOKEN = 2.0
 
 
 def system_prompt(language: str) -> str:
@@ -116,7 +116,7 @@ def system_prompt(language: str) -> str:
 
 
 def estimate_tokens(text: str) -> int:
-    return int(len(text) / _CHARS_PER_TOKEN) + 1
+    return int(len(text) / CHARS_PER_TOKEN) + 1
 
 
 def render_transcript(messages: list[dict[str, Any]]) -> str:
@@ -133,7 +133,7 @@ def render_transcript(messages: list[dict[str, Any]]) -> str:
 def split_text(text: str, budget_tokens: int) -> list[str]:
     if estimate_tokens(text) <= budget_tokens:
         return [text]
-    size = max(int((budget_tokens - 1) * _CHARS_PER_TOKEN), 1)
+    size = max(int((budget_tokens - 1) * CHARS_PER_TOKEN), 1)
     return [text[start : start + size] for start in range(0, len(text), size)]
 
 

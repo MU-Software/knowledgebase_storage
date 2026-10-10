@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import signal
 from contextlib import contextmanager, suppress
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
@@ -10,24 +11,26 @@ from socket import gethostname
 from typing import TYPE_CHECKING, Any
 
 import typer
-from httpx import AsyncClient, codes
+from httpx import AsyncClient, Response, codes
 
 from backend.models import JobKind, ProviderKind
 from backend.schemas import SessionItem, SessionNote, WorkerConfig
 from backend.summarizers import build_summarizer
-from backend.summarizers.base import Toolbox
-from backend.summarizers.session import MAX_VERIFIED, SessionPipeline
+from backend.summarizers.base import TOOL_FAILED, Toolbox
+from backend.summarizers.session import MAX_VERIFIED, SessionCheckpoint, SessionPipeline
 
 if TYPE_CHECKING:
     from collections.abc import Coroutine, Generator
 
     from backend.schemas import LLMProviderResolved
+    from backend.summarizers.session import Report
 
 logger = logging.getLogger(__name__)
 
 API_TIMEOUT_SECONDS = 60.0
 FALLBACK_POLL_SECONDS = 15.0
 HEARTBEAT_SECONDS = 300.0
+PROGRESS_TIMEOUT_SECONDS = 10.0
 MAX_ERROR_LENGTH = 2000
 
 SlotKey = tuple[str, int]
@@ -60,6 +63,39 @@ class ConfigCache:
     @property
     def poll_interval(self) -> float:
         return self.config.poll_interval_seconds if self.config else FALLBACK_POLL_SECONDS
+
+
+class ClaimLost(BaseException):
+    pass
+
+
+@dataclass
+class Progress:
+    api: AsyncClient
+    job: dict[str, Any]
+    claimed_with: str
+    checkpoint: SessionCheckpoint | None = None
+
+    def reporter(self, provider: str) -> Report:
+        async def report(progress: str, *, done: bool = False) -> None:
+            label = progress if provider == self.claimed_with else f"{progress} via {provider}"
+            body: dict[str, Any] = {"progress": label}
+            if done and self.checkpoint is not None:
+                self.checkpoint.credit(provider)
+                body["checkpoint"] = self.checkpoint.saved()
+            try:
+                response = await self.api.post(
+                    f"/api/jobs/{self.job['id']}/progress", params={"token": self.job["claim_token"]}, json=body, timeout=PROGRESS_TIMEOUT_SECONDS
+                )
+            except Exception as exc:  # noqa: BLE001
+                logger.warning("could not report the progress of job %s: %s", self.job["id"], exc)
+                return
+            if response.status_code == codes.CONFLICT:
+                raise ClaimLost(response.text)
+            if response.is_error:
+                logger.warning("could not report the progress of job %s: %d %s", self.job["id"], response.status_code, response.text[:200])
+
+        return report
 
 
 @dataclass
@@ -196,26 +232,26 @@ COMMANDS = {
 
 def git_toolbox(api: AsyncClient, network_id: str) -> Toolbox:
     async def run(name: str, arguments: dict[str, Any]) -> str:
-        start = int(arguments.get("start") or 1)
-        body = {
-            "network_id": network_id,
-            "command": COMMANDS.get(name, "log"),
-            "rev": arguments.get("rev") or arguments.get("commit") or "",
-            "path": arguments.get("path") or "",
-            "pattern": arguments.get("pattern") or "",
-            "since": arguments.get("since") or "",
-            "until": arguments.get("until") or "",
-            "script": arguments.get("script") or "",
-            "start": start,
-            "end": int(arguments.get("end") or start + 199),
-        }
         try:
+            start = int(arguments.get("start") or 1)
+            body = {
+                "network_id": network_id,
+                "command": COMMANDS.get(name, "log"),
+                "rev": arguments.get("rev") or arguments.get("commit") or "",
+                "path": arguments.get("path") or "",
+                "pattern": arguments.get("pattern") or "",
+                "since": arguments.get("since") or "",
+                "until": arguments.get("until") or "",
+                "script": arguments.get("script") or "",
+                "start": start,
+                "end": int(arguments.get("end") or start + 199),
+            }
             response = await api.post("/api/git/query", json=body)
+            if response.is_error:
+                return f"{TOOL_FAILED} with {response.status_code}: {response.text[:500]}"
+            return str(response.json().get("output") or "")
         except Exception as exc:  # noqa: BLE001
-            return f"tool failed: {exc}"
-        if response.is_error:
-            return f"tool failed with {response.status_code}: {response.text[:500]}"
-        return str(response.json().get("output") or "")
+            return f"{TOOL_FAILED}: {exc}"
 
     return Toolbox(specs=GIT_SPECS, run=run, rounds=6)
 
@@ -241,7 +277,9 @@ def background_of(job: dict[str, Any], plan: dict[str, Any]) -> str:
     return "\n\n".join(parts) + "\n\n---\n\n"
 
 
-async def produce_session(api: AsyncClient, job: dict[str, Any], provider: LLMProviderResolved, language: str) -> tuple[str, dict[str, Any]] | None:
+async def produce_session(
+    api: AsyncClient, job: dict[str, Any], provider: LLMProviderResolved, language: str, progress: Progress
+) -> tuple[str, dict[str, Any]] | None:
     plan = job.get("plan") or {}
     segments = plan.get("segments") or []
     prompts = job.get("prompts") or {}
@@ -252,7 +290,14 @@ async def produce_session(api: AsyncClient, job: dict[str, Any], provider: LLMPr
     tools = git_toolbox(api, str(network_id)) if network_id and provider.kind == ProviderKind.LLAMA else None
     verified = plan.get("verify_max_claims")
     pipeline = SessionPipeline(summarizer, prompts, tools, MAX_VERIFIED if verified is None else int(verified))
-    note = await pipeline.run(segments, background_of(job, plan))
+    if progress.checkpoint is None:
+        progress.checkpoint = SessionCheckpoint.resumed(job.get("checkpoint"), segments, prompts)
+    checkpoint = progress.checkpoint
+    try:
+        note = await pipeline.run(segments, background_of(job, plan), checkpoint.found, progress.reporter(provider.name))
+    except Exception:
+        checkpoint.credit(provider.name)
+        raise
     candidates = plan.get("candidates") or []
     filed = await pipeline.filed(segments, plan.get("split") or [], candidates, plan.get("names") or [], job["project"])
     return "note", {"notes": [note.model_dump(mode="json") for note in shared(note, filed, job["project"])]}
@@ -307,6 +352,7 @@ async def process(api: AsyncClient, job: dict[str, Any], config: WorkerConfig, f
     job_id, token = job["id"], job["claim_token"]
     errors: list[str] = []
     busy = False
+    progress = Progress(api, job, first.name)
 
     providers, next_eligible_in = partition(fallback_order(config, first, job), job)
     if not providers:
@@ -323,17 +369,20 @@ async def process(api: AsyncClient, job: dict[str, Any], config: WorkerConfig, f
 
             logger.info("working job %s (%s) with %s (project=%s)", job_id, job.get("kind"), provider.name, job["project"])
             try:
-                shaped = await produce_session(api, job, provider, config.document_language) if job.get("kind") == JobKind.SESSION else None
+                session = job.get("kind") == JobKind.SESSION
+                shaped = await produce_session(api, job, provider, config.document_language, progress) if session else None
                 endpoint, body = shaped if shaped is not None else await produce(job, provider, config.document_language)
             except Exception as exc:  # noqa: BLE001
                 logger.warning("provider %s failed on job %s: %s", provider.name, job_id, exc)
                 errors.append(f"{provider.name}: {exc}")
                 continue
 
+        priorities = {known.name: known.priority for known in config.providers}
+        credited = progress.checkpoint.credited(provider.name, priorities) if progress.checkpoint else provider.name
         try:
             response = await api.post(
                 f"/api/jobs/{job_id}/{endpoint}",
-                params={"summarizer": provider.name, "token": token},
+                params={"summarizer": credited, "token": token},
                 json=body,
             )
             if response.status_code != codes.CONFLICT:
@@ -376,16 +425,9 @@ async def slot(api: AsyncClient, worker: str, key: SlotKey, cache: ConfigCache, 
 
         job: dict[str, Any] | None = None
         try:
-            claimed = await api.post(
-                "/api/jobs/claim",
-                params={
-                    "worker": f"{worker}:{provider.name}",
-                    "provider": provider.name,
-                    "min_age_seconds": provider.min_job_age_seconds,
-                },
+            job = await claim(
+                api, {"worker": f"{worker}:{provider.name}", "provider": provider.name, "min_age_seconds": provider.min_job_age_seconds}
             )
-            claimed.raise_for_status()
-            job = None if claimed.status_code == codes.NO_CONTENT else claimed.json()
         except Exception:
             logger.exception("%s failed to claim a job", provider.name)
 
@@ -393,8 +435,25 @@ async def slot(api: AsyncClient, worker: str, key: SlotKey, cache: ConfigCache, 
             await asyncio.sleep(config.poll_interval_seconds)
 
 
+def claimed_job(response: Response) -> dict[str, Any] | None:
+    response.raise_for_status()
+    return None if response.status_code == codes.NO_CONTENT else response.json()
+
+
+async def claim(api: AsyncClient, params: dict[str, Any]) -> dict[str, Any] | None:
+    request = asyncio.ensure_future(api.post("/api/jobs/claim", params=params))
+    try:
+        return claimed_job(await asyncio.shield(request))
+    except asyncio.CancelledError:
+        with suppress(Exception):
+            if (job := claimed_job(await request)) is not None:
+                await release(api, job["id"], job["claim_token"], 0)
+        raise
+
+
 async def hold(api: AsyncClient, job: dict[str, Any], work: Coroutine[Any, Any, bool]) -> bool:
     task = asyncio.create_task(work)
+    stopping = surfaced = False
     try:
         while not (await asyncio.wait({task}, timeout=HEARTBEAT_SECONDS))[0]:
             try:
@@ -407,11 +466,23 @@ async def hold(api: AsyncClient, job: dict[str, Any], work: Coroutine[Any, Any, 
             if response.status_code == codes.CONFLICT and not task.done():
                 logger.warning("abandoning job %s: %s", job["id"], response.text)
                 return True
+        surfaced = True
         return task.result()
+    except ClaimLost as exc:
+        logger.warning("job %s was taken back while it was being worked on: %s", job["id"], exc)
+        return True
+    except asyncio.CancelledError:
+        stopping = True
+        raise
     finally:
-        task.cancel()
-        with suppress(asyncio.CancelledError):
-            await task
+        if not task.done():
+            task.cancel()
+            await asyncio.wait({task})
+        if not surfaced and not task.cancelled() and (error := task.exception()) is not None:
+            logger.error("job %s stopped with an error", job["id"], exc_info=error)
+        if stopping:
+            logger.info("handing job %s back before stopping", job["id"])
+            await release(api, job["id"], job["claim_token"], 0)
 
 
 async def supervise(api: AsyncClient, worker: str, cache: ConfigCache) -> None:
@@ -443,7 +514,19 @@ async def supervise(api: AsyncClient, worker: str, cache: ConfigCache) -> None:
 async def run(api_url: str, api_key: str, name: str) -> None:
     async with AsyncClient(base_url=api_url, headers={"X-API-Key": api_key}, timeout=API_TIMEOUT_SECONDS) as api:
         logger.info("worker %s started, polling %s", name, api_url)
-        await supervise(api, name, ConfigCache())
+        if (main := asyncio.current_task()) is not None:
+            loop = asyncio.get_running_loop()
+
+            def stop() -> None:
+                loop.add_signal_handler(signal.SIGTERM, logger.info, "already handing jobs back before stopping")
+                main.cancel()
+
+            with suppress(NotImplementedError):
+                loop.add_signal_handler(signal.SIGTERM, stop)
+        try:
+            await supervise(api, name, ConfigCache())
+        except asyncio.CancelledError:
+            logger.info("worker %s stopped", name)
 
 
 def worker(

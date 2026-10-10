@@ -28,7 +28,7 @@ if TYPE_CHECKING:
     from uuid import UUID
 
     from backend.models import NotePin
-    from backend.schemas import LinkVerdict, NoteRelations, SessionHeader, SessionItem, SessionNotes, SummaryResult
+    from backend.schemas import JobProgress, LinkVerdict, NoteRelations, SessionHeader, SessionItem, SessionNotes, SummaryResult
 
 logger = logging.getLogger(__name__)
 
@@ -36,6 +36,7 @@ BACKOFF_BASE_SECONDS = 60
 BACKOFF_CAP_SECONDS = 3600
 SETTLED_STATUSES = {JobStatus.DONE, JobStatus.FAILED}
 LAST_REQUEST_CHARS = 1000
+PROGRESS_CHARS = 200
 
 
 def last_request_of(transcript: list[dict[str, Any]] | None) -> str | None:
@@ -109,6 +110,12 @@ class JobService(ServiceImpl[JobRepository]):
         job.heartbeat_at = datetime.now(UTC)
         return await self.repository.save(job)
 
+    async def report(self, job: Job, payload: JobProgress) -> Job:
+        job.progress = payload.progress[:PROGRESS_CHARS]
+        if payload.checkpoint is not None:
+            job.checkpoint = payload.checkpoint
+        return await self.heartbeat(job)
+
     async def release(self, job: Job, retry_after_seconds: int = 0) -> Job:
         job.status = JobStatus.PENDING
         job.claimed_at = None
@@ -174,6 +181,7 @@ class JobService(ServiceImpl[JobRepository]):
             job.claimed_by = None
         else:
             job.status = JobStatus.DONE
+            job.checkpoint = None
         return await self.repository.save(job)
 
     async def complete(self, job: Job, result: SummaryResult, summarizer: str) -> Job:
@@ -188,6 +196,7 @@ class JobService(ServiceImpl[JobRepository]):
         job.claim_token = None
         job.status = JobStatus.DONE
         job.transcript = None
+        job.checkpoint = None
         return await self.repository.save(job)
 
     async def complete_memory(self, job: Job, content: str, summarizer: str) -> Job:
@@ -230,6 +239,8 @@ class JobService(ServiceImpl[JobRepository]):
         settled = job.refined_at is not None and job.completed_at is not None
         job.status = JobStatus.DONE if settled else JobStatus.FAILED
         job.next_attempt_at = None
+        if settled:
+            job.checkpoint = None
         return await self.repository.save(job)
 
     @staticmethod

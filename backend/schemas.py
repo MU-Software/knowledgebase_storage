@@ -302,6 +302,11 @@ class JobFailRequest(BaseModel):
     error: str
 
 
+class JobProgress(BaseModel):
+    progress: str
+    checkpoint: dict[str, Any] | None = Field(default=None, description="replaces the stored checkpoint when given")
+
+
 class JobPublic(JobBase):
     id: UUID
     kind: JobKind
@@ -313,6 +318,7 @@ class JobPublic(JobBase):
     heartbeat_at: datetime | None
     attempts: int
     last_error: str | None
+    progress: str | None
     summarizer: str | None
     note_path: str | None
     completed_at: datetime | None
@@ -474,6 +480,7 @@ class JobClaimed(BaseModel):
     last_activity_at: datetime
     claim_token: UUID | None
     transcript: list[dict[str, Any]] | None
+    checkpoint: dict[str, Any] | None = Field(default=None, description="what an earlier attempt finished, for the worker to resume from")
     context: str = Field(default="", description="notes from the projects above this one, as background for the summary")
     targets: list[str] = Field(default_factory=list, description="the names this job works with: child projects, or the notes it may link to")
     plan: SessionPlan | None = Field(default=None, description="segments, repository state and link candidates a session job needs")

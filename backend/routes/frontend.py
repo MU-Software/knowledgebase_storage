@@ -16,7 +16,7 @@ API_PREFIX = "/api"
 def register_frontend(app: FastAPI) -> None:
     @app.exception_handler(status.HTTP_404_NOT_FOUND)
     async def spa_fallback(request: Request, exc: Exception) -> Response:
-        if request.url.path.startswith(API_PREFIX) or not FRONTEND_PATH.exists():
+        if request.url.path == API_PREFIX or request.url.path.startswith(f"{API_PREFIX}/") or not FRONTEND_PATH.exists():
             return JSONResponse({"detail": getattr(exc, "detail", "not found")}, status_code=status.HTTP_404_NOT_FOUND)
         return FileResponse(FRONTEND_PATH, media_type="text/html")
 

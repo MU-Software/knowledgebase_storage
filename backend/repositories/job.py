@@ -59,7 +59,7 @@ class JobRepository(DBRepositoryImpl[Job]):
         return [desc(col(Job.created_at))]
 
     async def page(self, query_filter: QueryType, offset: int, limit: int) -> tuple[Sequence[Job], int]:
-        rows = select(Job).where(query_filter).order_by(*self.order_by).offset(offset).limit(limit)
+        rows = select(Job).options(defer(Job.checkpoint)).where(query_filter).order_by(*self.order_by).offset(offset).limit(limit)  # type: ignore[arg-type]
         total = select(func.count()).select_from(Job).where(query_filter)
         return (await self.session.exec(rows)).all(), (await self.session.exec(total)).one()
 
@@ -127,6 +127,7 @@ class JobRepository(DBRepositoryImpl[Job]):
         job.claimed_at = datetime.now(UTC)
         job.claimed_by = worker
         job.claim_token = uuid4()
+        job.progress = None
         return await self.save(job)
 
     async def ensure_background(self, kind: JobKind, session_id: str, project: str, note_path: str | None = None) -> Job | None:
@@ -245,6 +246,7 @@ class JobRepository(DBRepositoryImpl[Job]):
         job.claimed_at = None
         job.claimed_by = None
         job.claim_token = None
+        job.checkpoint = None
         return await self.save(job)
 
     async def refinable(self, summarizers: list[str], limit: int) -> Sequence[Job]:
@@ -270,7 +272,14 @@ class JobRepository(DBRepositoryImpl[Job]):
             col(Job.note_path).is_(None),
             col(Job.priority) == 0,
         )
-        done = {"status": JobStatus.DONE, "completed_at": datetime.now(UTC), "transcript": None, "summarizer": BACKGROUND_AGENT, "last_error": None}
+        done = {
+            "status": JobStatus.DONE,
+            "completed_at": datetime.now(UTC),
+            "transcript": None,
+            "summarizer": BACKGROUND_AGENT,
+            "last_error": None,
+            "checkpoint": None,
+        }
         return await self.bulk_update(query_filter, **done) > 0
 
     async def summarized_before(self, stale_before: datetime, limit: int) -> Sequence[Job]:
@@ -291,7 +300,9 @@ class JobRepository(DBRepositoryImpl[Job]):
 
     async def settle_decided(self) -> int:
         query_filter = and_(col(Job.kind) == JobKind.SESSION, col(Job.status) == JobStatus.PENDING, ~undecided())
-        return await self.bulk_update(query_filter, status=JobStatus.DONE, completed_at=datetime.now(UTC), transcript=None, claim_token=None)
+        return await self.bulk_update(
+            query_filter, status=JobStatus.DONE, completed_at=datetime.now(UTC), transcript=None, claim_token=None, checkpoint=None
+        )
 
     async def pending_sessions(self, limit: int, idle: timedelta) -> Sequence[Job]:
         now = datetime.now(UTC)
@@ -326,11 +337,12 @@ class JobRepository(DBRepositoryImpl[Job]):
         return await self.bulk_update(
             and_(
                 col(Job.kind) == JobKind.SESSION,
-                col(Job.transcript).is_not(None),
+                or_(col(Job.transcript).is_not(None), col(Job.checkpoint).is_not(None)),
                 col(Job.last_activity_at) < datetime.now(UTC) - retention,
                 col(Job.status).in_([JobStatus.DONE, JobStatus.FAILED]),
             ),
             transcript=None,
+            checkpoint=None,
         )
 
 

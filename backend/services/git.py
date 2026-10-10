@@ -208,9 +208,10 @@ class GitService(ServiceImpl[GitRepository]):
         if unsafe := [value for value in (payload.rev, payload.path, payload.pattern) if value.startswith("-")]:
             ClientError.INVALID_GIT_ARGUMENT.format_msg(argument=unsafe[0][:40]).raise_()
         where = network.relative_path
-        if payload.command in {"overview", "worktree"}:
-            shown = self.repository.overview(where) if payload.command == "overview" else self.worktree(where, payload.path)
-            return await self.with_large_files(shown, network.id)
+        if payload.command == "overview":
+            return await self.with_large_files(self.repository.overview(where), network.id)
+        if payload.command == "worktree":
+            return self.worktree(where, payload.path)
         chosen = payload.model_copy(update={"rev": self.revision(where, payload.rev)})
         if not chosen.rev:
             return "this repository holds no commit yet"

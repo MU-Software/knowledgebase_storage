@@ -49,6 +49,7 @@ class GitRepository(RepositoryImpl):
             ["git", "--git-dir", target.as_posix(), *args],  # noqa: S607
             capture_output=True,
             text=True,
+            errors="replace",
             timeout=TIMEOUT_SECONDS,
             check=False,
             env=ENVIRONMENT,

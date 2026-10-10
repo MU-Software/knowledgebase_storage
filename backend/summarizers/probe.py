@@ -4,8 +4,6 @@ import logging
 from time import perf_counter
 from typing import TYPE_CHECKING, Any
 
-from httpx import HTTPStatusError
-
 from backend.schemas import ProviderTestResult
 from backend.summarizers import build_summarizer
 
@@ -28,17 +26,17 @@ def elapsed_ms(started: float) -> int:
 
 
 def describe(exc: Exception) -> str:
-    # llama.cpp puts the reason in the body, which raise_for_status() leaves out
-    body = f": {exc.response.text}" if isinstance(exc, HTTPStatusError) else ""
-    return f"{type(exc).__name__}: {exc}{body}"[:MAX_DETAIL_LENGTH]
+    return f"{type(exc).__name__}: {exc}"[:MAX_DETAIL_LENGTH]
 
 
 async def probe(provider: LLMProviderResolved, language: str) -> ProviderTestResult:
     """Summarize a throwaway transcript, so a pass means the provider answers the way the worker needs it to."""
     capped = provider.model_copy(update={"timeout_seconds": min(provider.timeout_seconds, PROBE_TIMEOUT_SECONDS)})
     started = perf_counter()
+    summarizer = build_summarizer(capped, language)
+    summarizer.retry_seconds = ()
     try:
-        result = await build_summarizer(capped, language).summarize(PROBE_TRANSCRIPT, agent="probe", project="_probe", device="settings")
+        result = await summarizer.summarize(PROBE_TRANSCRIPT, agent="probe", project="_probe", device="settings")
     except Exception as exc:  # noqa: BLE001
         logger.info("provider %s failed its probe: %s", provider.name, exc)
         return ProviderTestResult(ok=False, latency_ms=elapsed_ms(started), detail=describe(exc))
