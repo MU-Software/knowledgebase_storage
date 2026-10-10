@@ -207,13 +207,19 @@ class BackgroundService(ServiceImpl[JobRepository]):
 
     async def pairs_worth_judging(self) -> list[tuple[str, str]]:
         owners: dict[str, set[str]] = {}
-        for entry in await self.entries.listed():
+        entries = await self.entries.listed()
+        for entry in entries:
             for source in entry.sources:
                 if path := source.get("path"):
                     owners.setdefault(path, set()).add(entry.slug)
 
         nested = [held | outside for path, held in owners.items() for other, outside in owners.items() if is_nested(path, other)]
-        wanted = self.combined([*owners.values(), *nested]) | await self.git.shared_pairs()
+        existing = {*self.projects.repository.slugs(), *(entry.slug for entry in entries)}
+        wanted: set[tuple[str, str]] = set()
+        for pair in self.combined([*owners.values(), *nested]) | await self.git.shared_pairs():
+            left, right = sorted([await self.projects.resolve(name) for name in pair])
+            if left != right and {left, right} <= existing:
+                wanted.add((left, right))
         known = {(link.source, link.target) for link in await self.links.repository.all_links()}
         known |= {(target, source) for source, target in known}
         return sorted(pair for pair in wanted if pair not in known)

@@ -73,7 +73,9 @@ class ProjectService(ServiceImpl[ProjectRepository]):
 
     async def merge(self, payload: ProjectMerge) -> ProjectMergeResult:
         source = await self.require(payload.source)
-        target = await self.require(payload.target)
+        target = await self.resolve(payload.target)
+        if target == source:
+            target = slugify(payload.target)
         if source == target:
             ClientError.INVALID_PROJECT_MERGE.raise_()
 
@@ -84,6 +86,7 @@ class ProjectService(ServiceImpl[ProjectRepository]):
     async def _absorb(self, source: str, target: str) -> Absorbed:
         directory = self.repository.require(source)
         destination = self.repository.base / target
+        destination.mkdir(exist_ok=True)
 
         absorbed = await self._merge_memories(directory, destination, source, target)
         own = self._move_notes(directory, destination, source)

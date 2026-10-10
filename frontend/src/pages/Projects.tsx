@@ -1,5 +1,6 @@
 import {
   Alert,
+  Autocomplete,
   Button,
   Chip,
   Dialog,
@@ -11,7 +12,6 @@ import {
   ListItem,
   ListItemButton,
   ListItemText,
-  MenuItem,
   Stack,
   TextField,
   Tooltip,
@@ -46,27 +46,28 @@ const MergeInto = ({ project, projects, onClose }: { project: ProjectNode; proje
 
   return (
     <Dialog open onClose={onClose} fullWidth maxWidth="sm">
-      <DialogTitle>Merge {project.name} into</DialogTitle>
+      <DialogTitle>Merge or rename {project.name}</DialogTitle>
       <DialogContent>
         <DialogContentText sx={{ mb: 2 }}>
-          Its notes move over, the name redirects here from now on, and memories that collide are kept under archive/ while an LLM merges them.
+          Its notes move over, the name redirects here from now on, and memories that collide are kept under archive/ while an LLM merges them. A name
+          no project has yet renames it.
         </DialogContentText>
-        <TextField select fullWidth size="small" value={target} label="Project" onChange={(event) => setTarget(event.target.value)}>
-          {candidates.map((other) => (
-            <MenuItem key={other.name} value={other.name}>
-              {other.name}
-            </MenuItem>
-          ))}
-        </TextField>
+        <Autocomplete
+          freeSolo
+          options={candidates.map((other) => other.name)}
+          inputValue={target}
+          onInputChange={(_, value) => setTarget(value)}
+          renderInput={(params) => <TextField {...params} fullWidth size="small" label="Project" />}
+        />
         {merge.error && <Alert severity="error" sx={{ mt: 2 }}>{`Could not do it: ${merge.error.message}`}</Alert>}
       </DialogContent>
       <DialogActions>
         <Button onClick={onClose}>Cancel</Button>
         <Button
           variant="contained"
-          onClick={() => merge.mutate({ source: project.name, target }, { onSuccess: onClose })}
-          disabled={merge.isPending || !target}>
-          Merge
+          onClick={() => merge.mutate({ source: project.name, target: target.trim() }, { onSuccess: onClose })}
+          disabled={merge.isPending || !target.trim()}>
+          {candidates.some((other) => other.name === target.trim()) ? 'Merge' : 'Rename'}
         </Button>
       </DialogActions>
     </Dialog>
