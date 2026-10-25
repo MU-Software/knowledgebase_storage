@@ -65,6 +65,16 @@ def slugify_segment(value: str) -> str:
     return kept.strip("-").lower() or "unknown"
 
 
+def without_nul(value: Any) -> Any:
+    if isinstance(value, str):
+        return value.replace("\x00", "")
+    if isinstance(value, list):
+        return [without_nul(item) for item in value]
+    if isinstance(value, dict):
+        return {without_nul(key): without_nul(item) for key, item in value.items()}
+    return value
+
+
 def background_session(kind: JobKind, target: str = "") -> str:
     return f"{kind.value}:{target}"
 
@@ -125,6 +135,11 @@ class JobBase(SQLModel):
     transcript: list[dict[str, Any]] | None = Field(default=None, sa_type=JSONB(none_as_null=True))
     started_at: datetime | None = Field(default=None, sa_type=DateTime(timezone=True))
     ended_at: datetime | None = Field(default=None, sa_type=DateTime(timezone=True))
+
+    @field_validator("transcript")
+    @classmethod
+    def storable_transcript(cls, messages: list[dict[str, Any]] | None) -> list[dict[str, Any]] | None:
+        return without_nul(messages)
 
     @staticmethod
     def digest_of(messages: list[dict[str, Any]] | None) -> str:
